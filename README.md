@@ -40,6 +40,9 @@ current `fleet-observability` repository and preserve its tests here.
 The first extraction pass is cataloged in
 [`docs/extraction-catalog.md`](docs/extraction-catalog.md).
 
+The proposed long-term folder layout is documented in
+[`docs/repository-structure.md`](docs/repository-structure.md).
+
 ## Compatibility Contract
 
 The node tools must emit data that the central stack can rely on:
