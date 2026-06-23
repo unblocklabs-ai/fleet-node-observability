@@ -1,0 +1,28 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local runtime and generated artifacts
+.runtime/
+output/
+tmp/
+*.log
+
+# Secrets and host-local config
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+*.token
+
+# macOS/editor noise
+*.swp
+*.swo
+.idea/
+.vscode/
