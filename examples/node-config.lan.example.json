@@ -1,0 +1,16 @@
+{
+  "node_label": "mini-03",
+  "node_user": "fleet-mini-03",
+  "home": "/Users/fleet-mini-03",
+  "network": "lan",
+  "node_exporter_port": 9100,
+  "node_exporter_tunnel_hostname": "",
+  "openclaw_ready_url": "http://127.0.0.1:18789/readyz",
+  "openclaw_service_name": "openclaw_gateway",
+  "openclaw_config_path": "~/.openclaw/openclaw.json",
+  "node_exporter_textfile_dir": "/opt/homebrew/var/lib/node_exporter/textfile_collector",
+  "fleet_node_exporter_scrape_token_file": "/Library/OpenClaw/fleet-node-exporter-scrape-token",
+  "codex_usage_enabled": true,
+  "codex_profile": "default",
+  "codex_usage_interval_secs": 300
+}

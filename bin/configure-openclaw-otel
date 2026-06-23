@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from fleet_node_observability.commands.configure_openclaw_otel import main
+
+raise SystemExit(main())

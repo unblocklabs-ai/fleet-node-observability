@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+PYTHON_BIN="${CODEX_NODE_PYTHON:-python3}"
+ROOT_DIR="${SCRIPT_DIR}/.."
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="${ROOT_DIR}/src:${PYTHONPATH}"
+else
+  export PYTHONPATH="${ROOT_DIR}/src"
+fi
+
+exec "$PYTHON_BIN" "$ROOT_DIR/src/fleet_node_observability/commands/node_exporter_proxy.py" "$@"

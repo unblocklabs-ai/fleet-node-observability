@@ -32,10 +32,26 @@ This repo should not contain:
 - Charizard deployment scripts
 - live dashboard audit artifacts
 
-## Initial Status
+## Quick Start
 
-This is a new scaffold. The next step is to extract the node-side code from the
-current `fleet-observability` repository and preserve its tests here.
+Prepare a sanitized node config, then install host metrics and configure OpenClaw
+OTLP separately:
+
+```bash
+cp examples/node-config.lan.example.json /tmp/node-config.lan.json
+./bin/install-lan-host-metrics --config /tmp/node-config.lan.json
+FLEET_INGEST_TOKEN=<token> ./bin/configure-openclaw-otel --config /tmp/node-config.lan.json
+```
+
+For off-LAN host metrics:
+
+```bash
+cp examples/node-config.off-lan.example.json /tmp/node-config.off-lan.json
+sudo ./bin/install-off-lan-host-metrics --config /tmp/node-config.off-lan.json
+FLEET_INGEST_TOKEN=<token> ./bin/configure-openclaw-otel --config /tmp/node-config.off-lan.json
+```
+
+## Planning Docs
 
 The first extraction pass is cataloged in
 [`docs/extraction-catalog.md`](docs/extraction-catalog.md).
@@ -61,9 +77,12 @@ depend on it.
 ## Repository Layout
 
 ```text
-docs/       Design notes and compatibility contracts.
-scripts/    Node-side install, configure, collect, and cleanup commands.
-tests/      Unit and fixture tests for node-side behavior.
+bin/        Stable operator command surface.
+src/        Stdlib-only implementation package and installer bodies.
+docs/       Operator docs, design notes, and compatibility contracts.
+examples/   Sanitized node config examples.
+packaging/  Local-first release artifact helpers.
+tests/      Unit and contract tests for node-side behavior.
 ```
 
 ## Development
@@ -75,7 +94,7 @@ documented.
 Expected local checks after extraction:
 
 ```bash
-python3 -m unittest discover -s tests -p "test_*.py"
-python3 -m py_compile scripts/*.py tests/*.py
-shellcheck scripts/*.sh
+PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m py_compile $(find src tests -name "*.py" -print)
+bash -n bin/* packaging/*.sh src/fleet_node_observability/collectors/*.sh src/fleet_node_observability/installers/*.sh
 ```

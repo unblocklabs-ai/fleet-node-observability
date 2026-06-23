@@ -2,7 +2,7 @@
 
 Source reviewed:
 
-- `/Users/bek/GitHub Projects/fleet-observability`
+- `<source fleet-observability checkout>`
 - Branch: `main`
 - Review date: 2026-06-23
 
@@ -67,10 +67,10 @@ scripts/install-node-exporter.sh \
   --codex-profile default
 
 sudo scripts/install-off-lan-host-metrics.sh \
-  --node-label theo \
-  --node-user thesis-theo \
+  --node-label mini_03 \
+  --node-user fleet-mini-03 \
   --node-exporter-port 9100 \
-  --tunnel-hostname node-exporter-theo.unblocklabs.ai \
+  --tunnel-hostname node-exporter-mini-03.example.net \
   --openclaw-ready-url http://127.0.0.1:18789/readyz
 ```
 
@@ -175,8 +175,8 @@ FLEET_INGEST_TOKEN=<token> scripts/configure-openclaw-otel.py \
   --service-name openclaw_gateway
 
 FLEET_INGEST_TOKEN=<token> scripts/print-otlp-env.py \
-  --node-label theo \
-  --endpoint https://loki-ingest.unblocklabs.ai \
+  --node-label mini_03 \
+  --endpoint https://loki-ingest.example.com \
   --service-name openclaw_gateway \
   --cf-access-client-id <client_id> \
   --cf-access-client-secret <client_secret>
@@ -239,15 +239,15 @@ Example node-local config:
 
 ```json
 {
-  "node_label": "theo",
-  "user": "thesis-theo",
-  "home": "/Users/thesis-theo",
+  "node_label": "mini_03",
+  "user": "fleet-mini-03",
+  "home": "/Users/fleet-mini-03",
   "network": "off_lan",
   "node_exporter_port": 9100,
-  "node_exporter_tunnel_hostname": "node-exporter-theo.unblocklabs.ai",
+  "node_exporter_tunnel_hostname": "node-exporter-mini-03.example.net",
   "openclaw_ready_url": "http://127.0.0.1:18789/readyz",
   "openclaw_service_name": "openclaw_gateway",
-  "otlp_http_endpoint": "https://loki-ingest.unblocklabs.ai",
+  "otlp_http_endpoint": "https://loki-ingest.example.com",
   "codex_usage_enabled": true,
   "codex_profile": "default",
   "codex_usage_interval_secs": 300
@@ -275,8 +275,8 @@ Move/recreate these test areas:
 
 - off-LAN installer uses root LaunchDaemons.
 - off-LAN installer includes expected labels:
-  - `com.unblocklabs.node-exporter`
-  - `com.unblocklabs.node-exporter-proxy`
+  - `com.example.fleet-node-exporter`
+  - `com.example.fleet-node-exporter-proxy`
   - `com.unblocklabs.codex-usage-textfile`
   - `com.unblocklabs.openclaw-gateway-health-textfile`
   - `com.unblocklabs.macos-thermal-textfile`

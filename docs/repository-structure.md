@@ -57,7 +57,6 @@ bin/
   collect-macos-thermal
   openclaw-gateway-health
   fleet-node-exporter-proxy
-  fleet-node-doctor
 ```
 
 What goes here:
@@ -100,7 +99,6 @@ src/fleet_node_observability/
   config.py
   otlp.py
   textfile.py
-  launchd.py
   platform.py
   paths.py
   commands/
@@ -110,7 +108,6 @@ src/fleet_node_observability/
     collect_codex_usage.py
     collect_macos_thermal.py
     node_exporter_proxy.py
-    doctor.py
   installers/
     lan_host_metrics.sh
     off_lan_host_metrics.sh
@@ -153,15 +150,15 @@ Expected config fields:
 
 ```json
 {
-  "node_label": "theo",
-  "user": "thesis-theo",
-  "home": "/Users/thesis-theo",
+  "node_label": "mini_03",
+  "user": "fleet-mini-03",
+  "home": "/Users/fleet-mini-03",
   "network": "off_lan",
   "node_exporter_port": 9100,
-  "node_exporter_tunnel_hostname": "node-exporter-theo.unblocklabs.ai",
+  "node_exporter_tunnel_hostname": "node-exporter-mini-03.example.net",
   "openclaw_ready_url": "http://127.0.0.1:18789/readyz",
   "openclaw_service_name": "openclaw_gateway",
-  "otlp_http_endpoint": "https://loki-ingest.unblocklabs.ai",
+  "otlp_http_endpoint": "https://loki-ingest.example.com",
   "codex_usage_enabled": true,
   "codex_profile": "default",
   "codex_usage_interval_secs": 300
@@ -202,19 +199,6 @@ Used by:
 - Codex usage collector.
 - macOS thermal collector.
 - OpenClaw gateway health collector if rewritten in Python later.
-
-### `src/fleet_node_observability/launchd.py`
-
-Shared launchd rendering helpers, only if it reduces duplication.
-
-Responsibilities:
-
-- plist escaping/rendering.
-- common LaunchAgent/LaunchDaemon load/unload helpers.
-- consistent labels and log paths.
-
-Keep shell installers readable. Do not hide every line of install behavior in a
-generic abstraction unless it materially reduces duplication.
 
 ### `src/fleet_node_observability/installers/`
 
@@ -337,7 +321,7 @@ examples/
   node-config.off-lan.example.json
   openclaw-otel.env.example
   launchd/
-    com.unblocklabs.node-exporter.plist.example
+    com.example.fleet-node-exporter.plist.example
 ```
 
 What goes here:
@@ -450,14 +434,12 @@ fleet-node-observability/
     collect-macos-thermal
     openclaw-gateway-health
     fleet-node-exporter-proxy
-    fleet-node-doctor
   src/
     fleet_node_observability/
       __init__.py
       config.py
       otlp.py
       textfile.py
-      launchd.py
       platform.py
       paths.py
       commands/
@@ -467,7 +449,6 @@ fleet-node-observability/
         collect_codex_usage.py
         collect_macos_thermal.py
         node_exporter_proxy.py
-        doctor.py
       installers/
         lan_host_metrics.sh
         off_lan_host_metrics.sh
