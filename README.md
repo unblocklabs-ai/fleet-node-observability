@@ -37,6 +37,9 @@ This repo should not contain:
 This is a new scaffold. The next step is to extract the node-side code from the
 current `fleet-observability` repository and preserve its tests here.
 
+The first extraction pass is cataloged in
+[`docs/extraction-catalog.md`](docs/extraction-catalog.md).
+
 ## Compatibility Contract
 
 The node tools must emit data that the central stack can rely on:
