@@ -135,12 +135,13 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
         self.assertIn('gateway_ready_url="http://127.0.0.1:9/readyz\\nwith\\tcontrols"', result.stdout)
 
     def test_prometheus_labels_strip_unsupported_control_characters(self) -> None:
-        result = self.run_script("prometheus", "http://127.0.0.1:9/readyz\x07with-bel", "mini\x0703")
+        result = self.run_script("prometheus", "http://127.0.0.1:9/readyz\x07with-bel\x7f", "mini\x0703\x7f")
 
         self.assertEqual(result.returncode, 0)
         self.assertIn('node="mini03"', result.stdout)
         self.assertIn('gateway_ready_url="http://127.0.0.1:9/readyzwith-bel"', result.stdout)
         self.assertNotIn("\x07", result.stdout)
+        self.assertNotIn("\x7f", result.stdout)
 
 
 if __name__ == "__main__":

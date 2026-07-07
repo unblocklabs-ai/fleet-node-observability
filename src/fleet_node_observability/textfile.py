@@ -9,15 +9,26 @@ from typing import Any
 
 
 def escape_label_value(value: Any) -> str:
-    """Escape a Prometheus label value."""
+    """Escape a Prometheus label value and strip unsupported controls."""
     text = str(value)
-    return (
-        text.replace("\\", "\\\\")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-        .replace("\r", "\\r")
-        .replace('"', '\\"')
-    )
+    out: list[str] = []
+    for char in text:
+        codepoint = ord(char)
+        if char == "\\":
+            out.append("\\\\")
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\t":
+            out.append("\\t")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == '"':
+            out.append('\\"')
+        elif codepoint < 0x20 or codepoint == 0x7F:
+            continue
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def write_textfile_atomic(path: Path, content: str, *, mode: int = 0o644) -> None:

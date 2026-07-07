@@ -83,7 +83,7 @@ for char in value:
         out.append("\\r")
     elif char == '"':
         out.append('\\"')
-    elif codepoint < 0x20:
+    elif codepoint < 0x20 or codepoint == 0x7f:
         continue
     else:
         out.append(char)

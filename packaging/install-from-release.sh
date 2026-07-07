@@ -96,6 +96,10 @@ canonical_install_dir() {
       ;;
   esac
 
+  if [[ "${target}" == /var/* && -d /private/var && -L /var ]]; then
+    target="/private${target}"
+  fi
+
   base="$(basename "${target}")"
   if [[ "${base}" != "fleet-node-observability" ]]; then
     echo "Install directory basename must be fleet-node-observability: ${target}" >&2
@@ -103,8 +107,75 @@ canonical_install_dir() {
   fi
 
   parent="$(dirname "${target}")"
+  reject_symlinked_existing_components "${parent}"
   mkdir -p "${parent}"
+  reject_symlinked_existing_components "${parent}"
+  if [[ -L "${target}" ]]; then
+    echo "Install directory must not be a symlink: ${target}" >&2
+    exit 1
+  fi
   (cd "${parent}" && printf '%s/%s\n' "$(pwd -P)" "${base}")
+}
+
+reject_symlinked_existing_components() {
+  local path="$1"
+  local current=""
+  local component
+  local parent
+  local base
+  local parent_physical
+  local canonical
+
+  if [[ -z "${path}" || "${path}" != /* ]]; then
+    echo "Path must be absolute: ${path}" >&2
+    exit 1
+  fi
+  while IFS= read -r component; do
+    [[ -z "${component}" ]] && continue
+    current="${current}/${component}"
+    if [[ ! -e "${current}" ]]; then
+      break
+    fi
+    if [[ -L "${current}" ]]; then
+      echo "Install path must not include symlinked parent directories: ${path}" >&2
+      exit 1
+    fi
+    parent="$(dirname "${current}")"
+    base="$(basename "${current}")"
+    parent_physical="$(cd "${parent}" && pwd -P)"
+    if [[ "${parent_physical}" == "/" ]]; then
+      canonical="/${base}"
+    else
+      canonical="${parent_physical}/${base}"
+    fi
+    if [[ "${canonical}" != "${current}" ]]; then
+      echo "Install path must not include symlinked parent directories: ${path}" >&2
+      exit 1
+    fi
+  done < <(printf '%s\n' "${path#/}" | tr '/' '\n')
+}
+
+revalidate_install_dir() {
+  local target="$1"
+  local parent
+  local canonical
+
+  if [[ "${target}" == /var/* && -d /private/var && -L /var ]]; then
+    target="/private${target}"
+  fi
+
+  parent="$(dirname "${target}")"
+  reject_symlinked_existing_components "${parent}"
+  reject_symlinked_existing_components "${target}"
+  if [[ -L "${target}" ]]; then
+    echo "Install directory must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  canonical="$(cd "${parent}" && printf '%s/%s\n' "$(pwd -P)" "$(basename "${target}")")"
+  if [[ "${canonical}" != "${target}" ]]; then
+    echo "Install directory changed after validation: ${target}" >&2
+    exit 1
+  fi
 }
 
 validate_tarball_members() {
@@ -259,24 +330,44 @@ for required_path in README.md VERSION bin src; do
   fi
 done
 
+revalidate_install_dir "${INSTALL_DIR}"
+if [[ -e "${INSTALL_DIR}" && ! -d "${INSTALL_DIR}" ]]; then
+  echo "Install directory exists but is not a directory: ${INSTALL_DIR}" >&2
+  exit 1
+fi
 if [[ -d "${INSTALL_DIR}" && "${OVERWRITE}" -eq 0 ]]; then
   echo "Install directory already exists: ${INSTALL_DIR}" >&2
   echo "Use --overwrite to replace it." >&2
   exit 1
 fi
 
-mkdir -p "${INSTALL_DIR}"
-if [[ "${OVERWRITE}" -eq 1 ]]; then
-  find "${INSTALL_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+install_parent="$(dirname "${INSTALL_DIR}")"
+install_stage="$(mktemp -d "${install_parent}/.fleet-node-observability.install.XXXXXX")"
+old_parent=""
+old_install=""
+cp -R "${extract_root}/." "${install_stage}/"
+if [[ -f "${install_stage}/packaging/build-release.sh" ]]; then
+  chmod +x "${install_stage}/packaging/build-release.sh"
+fi
+if [[ -f "${install_stage}/packaging/install-from-release.sh" ]]; then
+  chmod +x "${install_stage}/packaging/install-from-release.sh"
 fi
 
-cp -R "${extract_root}/." "${INSTALL_DIR}/"
-if [[ -f "${INSTALL_DIR}/packaging/build-release.sh" ]]; then
-  chmod +x "${INSTALL_DIR}/packaging/build-release.sh"
+revalidate_install_dir "${INSTALL_DIR}"
+if [[ -d "${INSTALL_DIR}" ]]; then
+  old_parent="$(mktemp -d "${install_parent}/.fleet-node-observability.old.XXXXXX")"
+  old_install="${old_parent}/fleet-node-observability"
+  mv "${INSTALL_DIR}" "${old_install}"
 fi
-if [[ -f "${INSTALL_DIR}/packaging/install-from-release.sh" ]]; then
-  chmod +x "${INSTALL_DIR}/packaging/install-from-release.sh"
+if ! mv "${install_stage}" "${INSTALL_DIR}"; then
+  if [[ -n "${old_install}" && -d "${old_install}" ]]; then
+    mv "${old_install}" "${INSTALL_DIR}"
+  fi
+  [[ -n "${old_parent}" ]] && rm -rf "${old_parent}"
+  rm -rf "${install_stage}"
+  exit 1
 fi
+[[ -n "${old_parent}" ]] && rm -rf "${old_parent}"
 
 cat <<EOF
 Installed:

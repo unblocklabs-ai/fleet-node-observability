@@ -103,7 +103,7 @@ for char in value:
         out.append("\\r")
     elif char == '"':
         out.append('\\"')
-    elif codepoint < 0x20:
+    elif codepoint < 0x20 or codepoint == 0x7f:
         continue
     else:
         out.append(char)
@@ -246,6 +246,68 @@ require_user_home_path() {
   require_allowed_prefix "$name" "$path" "$USER_HOME"
 }
 
+revalidate_allowed_path() {
+  local name="$1"
+  local path="$2"
+  shift 2
+  local canonical
+
+  canonical="$(require_allowed_prefix "$name" "$path" "$@")"
+  if [[ "$canonical" != "$path" ]]; then
+    echo "$name changed after validation: $path" >&2
+    exit 1
+  fi
+}
+
+revalidate_user_home_path() {
+  local name="$1"
+  local path="$2"
+
+  revalidate_allowed_path "$name" "$path" "$USER_HOME"
+}
+
+write_owned_file_atomic() {
+  local name="$1"
+  local path="$2"
+  local owner="$3"
+  local mode="$4"
+  shift 4
+  local parent
+  local base
+  local tmp
+
+  parent="$(dirname "$path")"
+  base="$(basename "$path")"
+  revalidate_allowed_path "$name" "$path" "$@"
+  revalidate_allowed_path "$name parent" "$parent" "$@"
+  if [[ ! -d "$parent" ]]; then
+    echo "$name parent must be a directory: $parent" >&2
+    exit 1
+  fi
+  if [[ -L "$path" || -d "$path" ]]; then
+    echo "$name must not be a symlink or directory: $path" >&2
+    exit 1
+  fi
+
+  tmp="$(mktemp "$parent/.${base}.XXXXXX")"
+  cat >"$tmp"
+  chmod "$mode" "$tmp"
+  chown "$owner" "$tmp"
+
+  revalidate_allowed_path "$name final" "$path" "$@"
+  if [[ -L "$path" || -d "$path" ]]; then
+    rm -f "$tmp"
+    echo "$name must not be a symlink or directory: $path" >&2
+    exit 1
+  fi
+  "$PYTHON_BIN" - "$tmp" "$path" <<'PY'
+import os
+import sys
+
+os.replace(sys.argv[1], sys.argv[2])
+PY
+}
+
 canonical_existing_dir() {
   local name="$1"
   local path="$2"
@@ -307,11 +369,48 @@ install_runtime_tree() {
   local runtime_dir="$1"
   local runtime_bin_dir="$2"
   local runtime_src_dir="$3"
+  local runtime_parent
+  local staging_dir
+  local old_parent
+  local old_runtime
 
-  rm -rf "$runtime_dir"
-  mkdir -p "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"
-  (cd "$REPO_DIR" && cp -R bin/. "$runtime_bin_dir/")
-  (cd "$REPO_DIR" && cp -R src/. "$runtime_src_dir/")
+  runtime_parent="$(dirname "$runtime_dir")"
+  revalidate_user_home_path "runtime parent" "$runtime_parent"
+  if [[ ! -d "$runtime_parent" ]]; then
+    echo "runtime parent must be a directory: $runtime_parent" >&2
+    exit 1
+  fi
+
+  staging_dir="$(mktemp -d "$runtime_parent/.fleet-node-observability.stage.XXXXXX")"
+  mkdir -p "$staging_dir/bin" "$staging_dir/src"
+  (cd "$REPO_DIR" && cp -R bin/. "$staging_dir/bin/")
+  (cd "$REPO_DIR" && cp -R src/. "$staging_dir/src/")
+
+  revalidate_user_home_path "runtime_dir" "$runtime_dir"
+  if [[ -L "$runtime_dir" || ( -e "$runtime_dir" && ! -d "$runtime_dir" ) ]]; then
+    rm -rf "$staging_dir"
+    echo "runtime_dir must be a directory and must not be a symlink: $runtime_dir" >&2
+    exit 1
+  fi
+
+  old_parent=""
+  old_runtime=""
+  if [[ -d "$runtime_dir" ]]; then
+    old_parent="$(mktemp -d "$runtime_parent/.fleet-node-observability.old.XXXXXX")"
+    old_runtime="$old_parent/runtime"
+    mv "$runtime_dir" "$old_runtime"
+  fi
+  if ! mv "$staging_dir" "$runtime_dir"; then
+    if [[ -n "$old_runtime" && -d "$old_runtime" ]]; then
+      mv "$old_runtime" "$runtime_dir"
+    fi
+    [[ -n "$old_parent" ]] && rm -rf "$old_parent"
+    rm -rf "$staging_dir"
+    exit 1
+  fi
+  [[ -n "$old_parent" ]] && rm -rf "$old_parent"
+  runtime_bin_dir="$runtime_dir/bin"
+  runtime_src_dir="$runtime_dir/src"
   chown "$USER_NAME" "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"
 }
 
@@ -320,12 +419,14 @@ ensure_user_dir() {
   local path="$2"
   local mode="$3"
 
+  revalidate_user_home_path "$name" "$path"
   if [[ -e "$path" && ! -d "$path" ]]; then
     echo "$name must be a directory: $path" >&2
     exit 1
   fi
   if [[ ! -d "$path" ]]; then
     mkdir -p "$path"
+    revalidate_user_home_path "$name" "$path"
     chown "$USER_NAME" "$path"
   fi
   chmod "$mode" "$path"
@@ -619,6 +720,12 @@ disable_user_launchagent_plist() {
 ensure_user_dir "openclaw_dir" "$OPENCLAW_DIR" 0700
 ensure_user_dir "secret_dir" "$SECRET_DIR" 0700
 ensure_user_dir "log_dir" "$LOG_DIR" 0755
+TEXTFILE_DIR="$(require_allowed_prefix \
+  "node_exporter_textfile_dir" \
+  "$TEXTFILE_DIR" \
+  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
+  "/usr/local/var/lib/node_exporter/textfile_collector" \
+  "$OPENCLAW_DIR/textfile_collector")"
 mkdir -p "$TEXTFILE_DIR"
 TEXTFILE_DIR="$(require_allowed_prefix \
   "node_exporter_textfile_dir" \
@@ -636,6 +743,12 @@ GATEWAY_TEXTFILE="$(require_allowed_prefix "gateway_textfile" "$GATEWAY_TEXTFILE
 THERMAL_TEXTFILE="$(require_allowed_prefix "thermal_textfile" "$THERMAL_TEXTFILE" "$TEXTFILE_DIR")"
 METRICS_INFO="$(require_allowed_prefix "metrics_info" "$METRICS_INFO" "$TEXTFILE_DIR")"
 install_runtime_tree "$RUNTIME_DIR" "$RUNTIME_BIN_DIR" "$RUNTIME_SRC_DIR"
+TEXTFILE_DIR="$(require_allowed_prefix \
+  "node_exporter_textfile_dir" \
+  "$TEXTFILE_DIR" \
+  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
+  "/usr/local/var/lib/node_exporter/textfile_collector" \
+  "$OPENCLAW_DIR/textfile_collector")"
 chown "$USER_NAME" "$TEXTFILE_DIR"
 chmod 0700 "$SECRET_DIR"
 
@@ -644,15 +757,19 @@ if [[ ! -s "$TOKEN_FILE" ]]; then
   echo "Create it with the token configured for Cloudflare/Prometheus, then re-run this installer." >&2
   exit 1
 fi
+TOKEN_FILE="$(require_allowed_prefix \
+  "fleet_node_exporter_scrape_token_file" \
+  "$TOKEN_FILE" \
+  "/Library/OpenClaw" \
+  "$SECRET_DIR")"
 chown "$USER_NAME" "$TOKEN_FILE"
 chmod 0600 "$TOKEN_FILE"
 
-cat >"$METRICS_INFO" <<EOF
+write_owned_file_atomic "metrics_info" "$METRICS_INFO" "$USER_NAME" 0644 "$TEXTFILE_DIR" <<EOF
 # HELP fleet_node_exporter_textfile_install_info node_exporter textfile collector install metadata.
 # TYPE fleet_node_exporter_textfile_install_info gauge
 fleet_node_exporter_textfile_install_info{node="$(prom_escape "$NODE")"} 1
 EOF
-chown "$USER_NAME" "$METRICS_INFO"
 
 echo "[off-lan-host-metrics] unloading previous fleet supervisors"
 for item in \
@@ -880,8 +997,7 @@ CURRENT_CRON="$(crontab -u "$USER_NAME" -l 2>/dev/null || true)"
 FILTERED_CRON="$(printf '%s\n' "$CURRENT_CRON" | grep -Ev 'fleet-host-metrics-ensure[.]sh|fleet-host-textfiles-refresh[.]sh' || true)"
 if [[ "$CURRENT_CRON" != "$FILTERED_CRON" ]]; then
   BACKUP="$(require_user_home_path "cron_backup_file" "$CRON_BACKUP_DIR/crontab-before-off-lan-host-metrics-$(date +%Y%m%d%H%M%S)")"
-  printf '%s\n' "$CURRENT_CRON" >"$BACKUP"
-  chown "$USER_NAME" "$BACKUP"
+  printf '%s\n' "$CURRENT_CRON" | write_owned_file_atomic "cron_backup_file" "$BACKUP" "$USER_NAME" 0600 "$CRON_BACKUP_DIR"
   printf '%s\n' "$FILTERED_CRON" | crontab -u "$USER_NAME" -
   echo "[off-lan-host-metrics] removed temporary fleet host-metrics cron lines; backup: $BACKUP"
 fi

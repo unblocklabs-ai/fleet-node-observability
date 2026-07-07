@@ -162,6 +162,63 @@ class PackagingContractTests(unittest.TestCase):
             self.assertEqual(overwrite_result.returncode, 0, overwrite_result.stderr)
             self.assertFalse(stale_file.exists())
 
+    @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks are not supported")
+    def test_install_from_release_rejects_symlinked_install_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = self.build_release(temp_path / "dist")
+            real_target = temp_path / "real-target"
+            real_target.mkdir()
+            install_dir = temp_path / "fleet-node-observability"
+            install_dir.symlink_to(real_target, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(install_dir),
+                    "--overwrite",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Install directory must not be a symlink", result.stderr)
+            self.assertFalse((real_target / "VERSION").exists())
+
+    @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks are not supported")
+    def test_install_from_release_rejects_symlinked_install_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = self.build_release(temp_path / "dist")
+            real_parent = temp_path / "real-parent"
+            real_parent.mkdir()
+            symlink_parent = temp_path / "link-parent"
+            symlink_parent.symlink_to(real_parent, target_is_directory=True)
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(symlink_parent / "fleet-node-observability"),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Install path must not include symlinked parent directories", result.stderr)
+            self.assertFalse((real_parent / "fleet-node-observability").exists())
+
     def test_install_from_release_rejects_checksum_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

@@ -85,7 +85,7 @@ class LanInstallerContractTest(unittest.TestCase):
             "prom_escape()",
             'elif char == "\\n":',
             'out.append("\\\\n")',
-            "codepoint < 0x20",
+            "codepoint < 0x20 or codepoint == 0x7f",
             "normalize_bool_flag()",
             "require_uint_range \"node_exporter_port\"",
             'CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"',
@@ -172,8 +172,8 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "RUNTIME_BIN_DIR=\"$RUNTIME_DIR/bin\"",
             "RUNTIME_SRC_DIR=\"$RUNTIME_DIR/src\"",
             "install_runtime_tree \"$RUNTIME_DIR\" \"$RUNTIME_BIN_DIR\" \"$RUNTIME_SRC_DIR\"",
-            "cp -R bin/. \"$runtime_bin_dir/\"",
-            "cp -R src/. \"$runtime_src_dir/\"",
+            'cp -R bin/. "$staging_dir/bin/"',
+            'cp -R src/. "$staging_dir/src/"',
             '$SCRIPT_DIR/../../..',
             "CODEX_COLLECTOR=\"$RUNTIME_BIN_DIR/collect-codex-usage\"",
             "GATEWAY_HEALTH=\"$RUNTIME_BIN_DIR/openclaw-gateway-health\"",
@@ -210,6 +210,8 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "canonical_managed_path()",
             "require_allowed_prefix",
             "require_user_home_path()",
+            "revalidate_allowed_path()",
+            "write_owned_file_atomic()",
             "must not be a symlink",
             "must not include symlinked parent directories",
             'TEXTFILE_DIR="$(require_allowed_prefix \\',
@@ -221,7 +223,7 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "chown \"$USER_NAME\" \"$TEXTFILE_DIR\"",
             'elif char == "\\n":',
             'out.append("\\\\n")',
-            "codepoint < 0x20",
+            "codepoint < 0x20 or codepoint == 0x7f",
         ]:
             self.assertIn(required, self.installer)
         self.assertGreaterEqual(self.installer.count('TEXTFILE_DIR="$(require_allowed_prefix \\'), 2)
@@ -250,6 +252,9 @@ class OffLanInstallerContractTest(unittest.TestCase):
             'ensure_user_dir "log_dir" "$LOG_DIR" 0755',
             'ensure_user_dir "cron_backup_dir" "$CRON_BACKUP_DIR" 0700',
             'chown "$USER_NAME" "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"',
+            'staging_dir="$(mktemp -d "$runtime_parent/.fleet-node-observability.stage.XXXXXX")"',
+            'write_owned_file_atomic "metrics_info" "$METRICS_INFO" "$USER_NAME" 0644 "$TEXTFILE_DIR"',
+            'write_owned_file_atomic "cron_backup_file" "$BACKUP" "$USER_NAME" 0600 "$CRON_BACKUP_DIR"',
         ]:
             self.assertIn(required, self.installer)
 

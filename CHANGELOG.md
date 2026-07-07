@@ -1,13 +1,24 @@
 # Changelog
 
+## 0.1.3 - 2026-07-07
+
+- Hardened off-LAN root writes by staging runtime replacement before rename and
+  atomically replacing root-written textfile and cron backup files after
+  immediate path revalidation.
+- Hardened release installs to reject symlinked install targets or parents and
+  stage release contents in a sibling directory before renaming into place.
+- Standardized Prometheus label escaping across Python collectors, shell
+  collectors, and installers: escape backslash, quote, newline, tab, and CR;
+  strip remaining C0 controls and DEL.
+
 ## 0.1.2 - 2026-07-07
 
 - Hardened off-LAN installer user-home path handling for root-created runtime,
   secret, log, and cron backup paths.
 - Escaped newline/tab/CR and stripped other control characters from installer
   Prometheus label values.
-- Escaped all C0 control characters in OpenClaw gateway health JSON and stripped
-  unsupported controls from Prometheus labels.
+- Escaped C0 control characters in OpenClaw gateway health JSON and stripped
+  unsupported C0 controls from Prometheus labels.
 - Documented exact macOS thermal textfile metric labels.
 
 ## 0.1.1 - 2026-07-07
