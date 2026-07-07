@@ -39,19 +39,12 @@ else
 fi
 
 json_escape() {
-  printf '%s' "$1" | awk '
-    BEGIN { ORS = "" }
-    {
-      gsub(/\\/, "\\\\")
-      gsub(/"/, "\\\"")
-      gsub(/\t/, "\\t")
-      gsub(/\r/, "\\r")
-      if (NR > 1) {
-        printf "\\n"
-      }
-      printf "%s", $0
-    }
-  '
+  python3 - "$1" <<'PY'
+import json
+import sys
+
+print(json.dumps(sys.argv[1])[1:-1], end="")
+PY
 }
 
 emit() {
@@ -73,19 +66,29 @@ emit() {
 }
 
 escape_label() {
-  printf '%s' "$1" | awk '
-    BEGIN { ORS = "" }
-    {
-      gsub(/\\/, "\\\\")
-      gsub(/"/, "\\\"")
-      gsub(/\t/, "\\t")
-      gsub(/\r/, "\\r")
-      if (NR > 1) {
-        printf "\\n"
-      }
-      printf "%s", $0
-    }
-  '
+  python3 - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+out = []
+for char in value:
+    codepoint = ord(char)
+    if char == "\\":
+        out.append("\\\\")
+    elif char == "\n":
+        out.append("\\n")
+    elif char == "\t":
+        out.append("\\t")
+    elif char == "\r":
+        out.append("\\r")
+    elif char == '"':
+        out.append('\\"')
+    elif codepoint < 0x20:
+        continue
+    else:
+        out.append(char)
+print("".join(out), end="")
+PY
 }
 
 emit_prometheus() {

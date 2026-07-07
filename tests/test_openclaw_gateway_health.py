@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import socket
 import subprocess
@@ -116,6 +117,15 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 1)
         self.assertIn('"gateway_ready_url":"http://127.0.0.1:9/readyz\\nwith\\tcontrols"', result.stdout)
+        json.loads(result.stdout)
+
+    def test_status_json_escapes_non_newline_control_characters(self) -> None:
+        result = self.run_script("status", "http://127.0.0.1:9/readyz\x07with-bel", "mini_03")
+
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["gateway_ready_url"], "http://127.0.0.1:9/readyz\x07with-bel")
+        self.assertIn('"gateway_ready_url":"http://127.0.0.1:9/readyz\\u0007with-bel"', result.stdout)
 
     def test_prometheus_labels_escape_control_characters(self) -> None:
         result = self.run_script("prometheus", "http://127.0.0.1:9/readyz\nwith\tcontrols", "mini\n03")
@@ -123,6 +133,14 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('node="mini\\n03"', result.stdout)
         self.assertIn('gateway_ready_url="http://127.0.0.1:9/readyz\\nwith\\tcontrols"', result.stdout)
+
+    def test_prometheus_labels_strip_unsupported_control_characters(self) -> None:
+        result = self.run_script("prometheus", "http://127.0.0.1:9/readyz\x07with-bel", "mini\x0703")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('node="mini03"', result.stdout)
+        self.assertIn('gateway_ready_url="http://127.0.0.1:9/readyzwith-bel"', result.stdout)
+        self.assertNotIn("\x07", result.stdout)
 
 
 if __name__ == "__main__":

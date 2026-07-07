@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.2 - 2026-07-07
+
+- Hardened off-LAN installer user-home path handling for root-created runtime,
+  secret, log, and cron backup paths.
+- Escaped newline/tab/CR and stripped other control characters from installer
+  Prometheus label values.
+- Escaped all C0 control characters in OpenClaw gateway health JSON and stripped
+  unsupported controls from Prometheus labels.
+- Documented exact macOS thermal textfile metric labels.
+
 ## 0.1.1 - 2026-07-07
 
 - Hardened `configure-openclaw-otel` writes so OpenClaw config, backups, and

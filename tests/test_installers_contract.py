@@ -83,6 +83,9 @@ class LanInstallerContractTest(unittest.TestCase):
         for required in [
             "xml_escape()",
             "prom_escape()",
+            'elif char == "\\n":',
+            'out.append("\\\\n")',
+            "codepoint < 0x20",
             "normalize_bool_flag()",
             "require_uint_range \"node_exporter_port\"",
             'CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"',
@@ -206,6 +209,7 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "reject_unsafe_path()",
             "canonical_managed_path()",
             "require_allowed_prefix",
+            "require_user_home_path()",
             "must not be a symlink",
             "must not include symlinked parent directories",
             'TEXTFILE_DIR="$(require_allowed_prefix \\',
@@ -215,11 +219,39 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "require_uint_range \"node_exporter_port\"",
             "require_uint_range \"codex_usage_interval_secs\"",
             "chown \"$USER_NAME\" \"$TEXTFILE_DIR\"",
+            'elif char == "\\n":',
+            'out.append("\\\\n")',
+            "codepoint < 0x20",
         ]:
             self.assertIn(required, self.installer)
         self.assertGreaterEqual(self.installer.count('TEXTFILE_DIR="$(require_allowed_prefix \\'), 2)
         self.assertGreaterEqual(self.installer.count('TOKEN_FILE="$(require_allowed_prefix \\'), 2)
         self.assertNotIn('chown -R "$USER_NAME" "$TEXTFILE_DIR"', self.installer)
+        self.assertNotIn("chown -R", self.installer)
+
+    def test_off_lan_installer_validates_root_mutated_user_home_paths(self) -> None:
+        for required in [
+            'OPENCLAW_DIR="$(require_user_home_path "openclaw_dir" "$OPENCLAW_DIR")"',
+            'SECRET_DIR="$(require_user_home_path "secret_dir" "$SECRET_DIR")"',
+            'LOG_DIR="$(require_user_home_path "log_dir" "$LOG_DIR")"',
+            'RUNTIME_DIR="$(require_user_home_path "runtime_dir" "$RUNTIME_DIR")"',
+            'RUNTIME_BIN_DIR="$(require_user_home_path "runtime_bin_dir" "$RUNTIME_BIN_DIR")"',
+            'RUNTIME_SRC_DIR="$(require_user_home_path "runtime_src_dir" "$RUNTIME_SRC_DIR")"',
+            'CRON_BACKUP_DIR="$(require_user_home_path "cron_backup_dir" "$OPENCLAW_DIR/backups")"',
+            'BACKUP="$(require_user_home_path "cron_backup_file" "$CRON_BACKUP_DIR/crontab-before-off-lan-host-metrics-$(date +%Y%m%d%H%M%S)")"',
+            'CODEX_TEXTFILE="$(require_allowed_prefix "codex_textfile" "$CODEX_TEXTFILE" "$TEXTFILE_DIR")"',
+            'GATEWAY_TEXTFILE="$(require_allowed_prefix "gateway_textfile" "$GATEWAY_TEXTFILE" "$TEXTFILE_DIR")"',
+            'THERMAL_TEXTFILE="$(require_allowed_prefix "thermal_textfile" "$THERMAL_TEXTFILE" "$TEXTFILE_DIR")"',
+            'METRICS_INFO="$(require_allowed_prefix "metrics_info" "$METRICS_INFO" "$TEXTFILE_DIR")"',
+            'plist="$(require_user_home_path "legacy LaunchAgent plist" "$USER_HOME/Library/LaunchAgents/$label.plist")"',
+            'disabled="$(require_user_home_path "legacy LaunchAgent archive" "$plist.disabled-$(date -u +%Y%m%dT%H%M%SZ)")"',
+            'ensure_user_dir "openclaw_dir" "$OPENCLAW_DIR" 0700',
+            'ensure_user_dir "secret_dir" "$SECRET_DIR" 0700',
+            'ensure_user_dir "log_dir" "$LOG_DIR" 0755',
+            'ensure_user_dir "cron_backup_dir" "$CRON_BACKUP_DIR" 0700',
+            'chown "$USER_NAME" "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"',
+        ]:
+            self.assertIn(required, self.installer)
 
     def test_installers_accept_central_boolean_spellings_for_codex_usage(self) -> None:
         lan_installer = (ROOT / "src/fleet_node_observability/installers/lan_host_metrics.sh").read_text(

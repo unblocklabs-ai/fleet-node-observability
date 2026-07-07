@@ -45,10 +45,32 @@ Codex labels:
 ## macOS thermal
 
 - `fleet_macos_thermal_pressure_available`
+  - labels:
+    - `node`
+    - `node_label`
+    - `source`
 - `fleet_macos_thermal_pressure_level`
+  - labels:
+    - `node`
+    - `node_label`
+    - `source`
+    - `pressure`
 - `fleet_macos_thermal_collector_success`
+  - labels:
+    - `node`
+    - `node_label`
+    - `source`
 - `fleet_macos_thermal_collected_at_seconds`
+  - labels:
+    - `node`
+    - `node_label`
+    - `source`
 - `fleet_macos_thermal_collection_error_info`
+  - labels:
+    - `node`
+    - `node_label`
+    - `source`
+    - `error`
 
 ## Expected labels
 

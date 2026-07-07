@@ -94,7 +94,29 @@ xml_escape() {
 }
 
 prom_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+  "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+out = []
+for char in value:
+    codepoint = ord(char)
+    if char == "\\":
+        out.append("\\\\")
+    elif char == "\n":
+        out.append("\\n")
+    elif char == "\t":
+        out.append("\\t")
+    elif char == "\r":
+        out.append("\\r")
+    elif char == '"':
+        out.append('\\"')
+    elif codepoint < 0x20:
+        continue
+    else:
+        out.append(char)
+print("".join(out), end="")
+PY
 }
 
 require_uint_range() {

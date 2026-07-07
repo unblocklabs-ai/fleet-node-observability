@@ -86,7 +86,29 @@ xml_escape() {
 }
 
 prom_escape() {
-  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+  "$PYTHON_BIN" - "$1" <<'PY'
+import sys
+
+value = sys.argv[1]
+out = []
+for char in value:
+    codepoint = ord(char)
+    if char == "\\":
+        out.append("\\\\")
+    elif char == "\n":
+        out.append("\\n")
+    elif char == "\t":
+        out.append("\\t")
+    elif char == "\r":
+        out.append("\\r")
+    elif char == '"':
+        out.append('\\"')
+    elif codepoint < 0x20:
+        continue
+    else:
+        out.append(char)
+print("".join(out), end="")
+PY
 }
 
 require_uint_range() {
@@ -217,6 +239,13 @@ require_allowed_prefix() {
   exit 1
 }
 
+require_user_home_path() {
+  local name="$1"
+  local path="$2"
+
+  require_allowed_prefix "$name" "$path" "$USER_HOME"
+}
+
 canonical_existing_dir() {
   local name="$1"
   local path="$2"
@@ -283,7 +312,23 @@ install_runtime_tree() {
   mkdir -p "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"
   (cd "$REPO_DIR" && cp -R bin/. "$runtime_bin_dir/")
   (cd "$REPO_DIR" && cp -R src/. "$runtime_src_dir/")
-  chown -R "$USER_NAME" "$runtime_dir"
+  chown "$USER_NAME" "$runtime_dir" "$runtime_bin_dir" "$runtime_src_dir"
+}
+
+ensure_user_dir() {
+  local name="$1"
+  local path="$2"
+  local mode="$3"
+
+  if [[ -e "$path" && ! -d "$path" ]]; then
+    echo "$name must be a directory: $path" >&2
+    exit 1
+  fi
+  if [[ ! -d "$path" ]]; then
+    mkdir -p "$path"
+    chown "$USER_NAME" "$path"
+  fi
+  chmod "$mode" "$path"
 }
 
 NODE_LABEL_CLI=""
@@ -444,6 +489,13 @@ LAUNCHD_DIR="/Library/LaunchDaemons"
 PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HEADER_NAME="X-Fleet-Scrape-Token"
 
+OPENCLAW_DIR="$(require_user_home_path "openclaw_dir" "$OPENCLAW_DIR")"
+SECRET_DIR="$(require_user_home_path "secret_dir" "$SECRET_DIR")"
+LOG_DIR="$(require_user_home_path "log_dir" "$LOG_DIR")"
+RUNTIME_DIR="$(require_user_home_path "runtime_dir" "$RUNTIME_DIR")"
+RUNTIME_BIN_DIR="$(require_user_home_path "runtime_bin_dir" "$RUNTIME_BIN_DIR")"
+RUNTIME_SRC_DIR="$(require_user_home_path "runtime_src_dir" "$RUNTIME_SRC_DIR")"
+
 TEXTFILE_DIR="$(require_allowed_prefix \
   "node_exporter_textfile_dir" \
   "$TEXTFILE_DIR" \
@@ -551,17 +603,23 @@ kill_tcp_listener() {
 
 disable_user_launchagent_plist() {
   local label="$1"
-  local plist="$USER_HOME/Library/LaunchAgents/$label.plist"
+  local plist
+  local disabled
+
+  plist="$(require_user_home_path "legacy LaunchAgent plist" "$USER_HOME/Library/LaunchAgents/$label.plist")"
   if [[ ! -e "$plist" ]]; then
     return 0
   fi
-  local disabled="$plist.disabled-$(date -u +%Y%m%dT%H%M%SZ)"
+  disabled="$(require_user_home_path "legacy LaunchAgent archive" "$plist.disabled-$(date -u +%Y%m%dT%H%M%SZ)")"
   mv "$plist" "$disabled"
   chown "$USER_NAME" "$disabled"
   echo "[off-lan-host-metrics] archived old user LaunchAgent: $disabled"
 }
 
-mkdir -p "$TEXTFILE_DIR" "$OPENCLAW_DIR" "$SECRET_DIR" "$LOG_DIR"
+ensure_user_dir "openclaw_dir" "$OPENCLAW_DIR" 0700
+ensure_user_dir "secret_dir" "$SECRET_DIR" 0700
+ensure_user_dir "log_dir" "$LOG_DIR" 0755
+mkdir -p "$TEXTFILE_DIR"
 TEXTFILE_DIR="$(require_allowed_prefix \
   "node_exporter_textfile_dir" \
   "$TEXTFILE_DIR" \
@@ -573,9 +631,12 @@ TOKEN_FILE="$(require_allowed_prefix \
   "$TOKEN_FILE" \
   "/Library/OpenClaw" \
   "$SECRET_DIR")"
+CODEX_TEXTFILE="$(require_allowed_prefix "codex_textfile" "$CODEX_TEXTFILE" "$TEXTFILE_DIR")"
+GATEWAY_TEXTFILE="$(require_allowed_prefix "gateway_textfile" "$GATEWAY_TEXTFILE" "$TEXTFILE_DIR")"
+THERMAL_TEXTFILE="$(require_allowed_prefix "thermal_textfile" "$THERMAL_TEXTFILE" "$TEXTFILE_DIR")"
+METRICS_INFO="$(require_allowed_prefix "metrics_info" "$METRICS_INFO" "$TEXTFILE_DIR")"
 install_runtime_tree "$RUNTIME_DIR" "$RUNTIME_BIN_DIR" "$RUNTIME_SRC_DIR"
 chown "$USER_NAME" "$TEXTFILE_DIR"
-chown -R "$USER_NAME" "$OPENCLAW_DIR" "$LOG_DIR" "$RUNTIME_DIR"
 chmod 0700 "$SECRET_DIR"
 
 if [[ ! -s "$TOKEN_FILE" ]]; then
@@ -813,13 +874,12 @@ fi
 rm -f "$METRICS_TMP"
 unset TOKEN
 
-CRON_BACKUP_DIR="$OPENCLAW_DIR/backups"
-mkdir -p "$CRON_BACKUP_DIR"
-chown "$USER_NAME" "$CRON_BACKUP_DIR"
+CRON_BACKUP_DIR="$(require_user_home_path "cron_backup_dir" "$OPENCLAW_DIR/backups")"
+ensure_user_dir "cron_backup_dir" "$CRON_BACKUP_DIR" 0700
 CURRENT_CRON="$(crontab -u "$USER_NAME" -l 2>/dev/null || true)"
 FILTERED_CRON="$(printf '%s\n' "$CURRENT_CRON" | grep -Ev 'fleet-host-metrics-ensure[.]sh|fleet-host-textfiles-refresh[.]sh' || true)"
 if [[ "$CURRENT_CRON" != "$FILTERED_CRON" ]]; then
-  BACKUP="$CRON_BACKUP_DIR/crontab-before-off-lan-host-metrics-$(date +%Y%m%d%H%M%S)"
+  BACKUP="$(require_user_home_path "cron_backup_file" "$CRON_BACKUP_DIR/crontab-before-off-lan-host-metrics-$(date +%Y%m%d%H%M%S)")"
   printf '%s\n' "$CURRENT_CRON" >"$BACKUP"
   chown "$USER_NAME" "$BACKUP"
   printf '%s\n' "$FILTERED_CRON" | crontab -u "$USER_NAME" -
