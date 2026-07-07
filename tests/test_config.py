@@ -66,3 +66,14 @@ class ResolveOtlpConfigTest(unittest.TestCase):
             cfg = resolve_otlp_config(config_path=config_path)
             self.assertEqual(cfg.cf_access_client_id, "id.from.config")
             self.assertEqual(cfg.cf_access_client_secret, "secret.from.config")
+
+    def test_sanitized_examples_resolve_required_otlp_endpoint(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        lan_cfg = resolve_otlp_config(config_path=root / "examples" / "node-config.lan.example.json")
+        self.assertEqual(lan_cfg.endpoint, "http://192.168.10.11:4318")
+        self.assertEqual(lan_cfg.network, "lan")
+
+        off_lan_cfg = resolve_otlp_config(config_path=root / "examples" / "node-config.off-lan.example.json")
+        self.assertEqual(off_lan_cfg.endpoint, "https://loki-ingest.example.com")
+        self.assertEqual(off_lan_cfg.network, "off_lan")

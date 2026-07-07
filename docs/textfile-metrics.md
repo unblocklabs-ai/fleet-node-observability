@@ -52,16 +52,17 @@ Codex labels:
 
 ## Expected labels
 
-Python collectors should include at least:
+Collectors intentionally emit no `hostname` label or trusted node-identity
+assertion. Some published metrics retain the operator-supplied `node` label for
+compatibility, but central Alloy and Prometheus configuration derives trusted
+node identity during scrape and relabeling.
 
-- `node`: stable machine label.
-- `hostname`: local host identifier.
+`account_email` is a deliberate, owner-approved Codex usage label retained for
+operator triage. Keep it stable unless the central contract is explicitly
+changed.
 
-Shell collectors may expose a smaller label set when the source signal is
-single-purpose. `openclaw_gateway_ready` intentionally uses only `node` and
-`gateway_ready_url`.
-
-Use lowercase label names and avoid high-cardinality account identifiers.
+Use lowercase label names and avoid adding new high-cardinality account
+identifiers beyond `account_email`.
 
 ## Scrape path contract
 

@@ -83,7 +83,11 @@ class LanInstallerContractTest(unittest.TestCase):
         for required in [
             "xml_escape()",
             "prom_escape()",
+            "normalize_bool_flag()",
             "require_uint_range \"node_exporter_port\"",
+            'CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"',
+            "1|true|yes|on)",
+            "0|false|no|off)",
             'fleet_node_exporter_textfile_install_info{node="$(prom_escape "$NODE")"} 1',
             '<string>$(xml_escape "$OPENCLAW_READY_URL")</string>',
         ]:
@@ -200,14 +204,33 @@ class OffLanInstallerContractTest(unittest.TestCase):
     def test_off_lan_installer_rejects_unsafe_paths_and_ports(self) -> None:
         for required in [
             "reject_unsafe_path()",
+            "canonical_managed_path()",
             "require_allowed_prefix",
             "must not be a symlink",
+            "must not include symlinked parent directories",
+            'TEXTFILE_DIR="$(require_allowed_prefix \\',
+            'TOKEN_FILE="$(require_allowed_prefix \\',
+            'canonical_path="$(canonical_managed_path "$name" "$path")"',
+            'canonical_prefix="$(canonical_managed_path "allowed prefix for $name" "$prefix")"',
             "require_uint_range \"node_exporter_port\"",
             "require_uint_range \"codex_usage_interval_secs\"",
             "chown \"$USER_NAME\" \"$TEXTFILE_DIR\"",
         ]:
             self.assertIn(required, self.installer)
+        self.assertGreaterEqual(self.installer.count('TEXTFILE_DIR="$(require_allowed_prefix \\'), 2)
+        self.assertGreaterEqual(self.installer.count('TOKEN_FILE="$(require_allowed_prefix \\'), 2)
         self.assertNotIn('chown -R "$USER_NAME" "$TEXTFILE_DIR"', self.installer)
+
+    def test_installers_accept_central_boolean_spellings_for_codex_usage(self) -> None:
+        lan_installer = (ROOT / "src/fleet_node_observability/installers/lan_host_metrics.sh").read_text(
+            encoding="utf-8"
+        )
+        for installer in [self.installer, lan_installer]:
+            self.assertIn("normalize_bool_flag()", installer)
+            self.assertIn("1|true|yes|on)", installer)
+            self.assertIn("0|false|no|off)", installer)
+            self.assertIn("must be a boolean value", installer)
+            self.assertIn('CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"', installer)
 
     def test_off_lan_installer_validates_node_home_against_system_account(self) -> None:
         for required in [
@@ -220,6 +243,15 @@ class OffLanInstallerContractTest(unittest.TestCase):
         ]:
             self.assertIn(required, self.installer)
         self.assertNotIn('USER_HOME="/Users/${USER_NAME}"', self.installer)
+
+    def test_off_lan_installer_revalidates_listener_before_sigkill(self) -> None:
+        for required in [
+            "listener_pid_is_managed()",
+            'if ! listener_pid_is_managed "$pid"; then',
+            "now has unmanaged pid=$pid after graceful stop; skipping SIGKILL",
+            'kill -9 "$pid"',
+        ]:
+            self.assertIn(required, self.installer)
 
     def test_off_lan_wrapper_executes_impl(self) -> None:
         self.assertIn("src/fleet_node_observability/installers/off_lan_host_metrics.sh", self.wrapper)

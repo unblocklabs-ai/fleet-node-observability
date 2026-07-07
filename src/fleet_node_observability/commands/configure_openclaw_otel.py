@@ -27,6 +27,60 @@ def load_openclaw_config(path: Path) -> dict:
     return payload
 
 
+def _fsync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write_new_secure_file(path: Path, content: str) -> None:
+    fd = -1
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(path, 0o600)
+    except OSError:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _write_secure_atomic(path: Path, content: str) -> None:
+    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    fd = -1
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        os.chmod(path, 0o600)
+        _fsync_directory(path.parent)
+    except OSError:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def write_openclaw_config(path: Path, payload: dict, *, backup: bool) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -34,15 +88,13 @@ def write_openclaw_config(path: Path, payload: dict, *, backup: bool) -> Path | 
     if backup and path.exists():
         backup_path = path.with_name(f"{path.name}.bak-fleet-otel-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
         try:
-            backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            _write_new_secure_file(backup_path, path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ConfigError(f"unable to create backup {backup_path}: {exc}") from exc
 
     updated_payload = json.dumps(payload, indent=2, sort_keys=False) + "\n"
-    tmp_path = path.with_name(f"{path.name}.tmp")
     try:
-        tmp_path.write_text(updated_payload, encoding="utf-8")
-        os.replace(tmp_path, path)
+        _write_secure_atomic(path, updated_payload)
     except OSError as exc:
         raise ConfigError(f"unable to write {path}: {exc}") from exc
     return backup_path

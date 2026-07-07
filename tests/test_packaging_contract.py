@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 class PackagingContractTests(unittest.TestCase):
@@ -21,7 +22,7 @@ class PackagingContractTests(unittest.TestCase):
             timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        return output_dir / "fleet-node-observability-0.1.0.tar.gz"
+        return output_dir / f"fleet-node-observability-{VERSION}.tar.gz"
 
     def test_build_release_excludes_scripts_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -32,11 +33,11 @@ class PackagingContractTests(unittest.TestCase):
                 names = archive.getnames()
 
             self.assertFalse(
-                any(name.startswith("fleet-node-observability-0.1.0/scripts") for name in names),
+                any(name.startswith(f"fleet-node-observability-{VERSION}/scripts") for name in names),
                 "release artifact must not include the broad legacy scripts/ path",
             )
             self.assertFalse(
-                any(name.startswith("fleet-node-observability-0.1.0/tests") for name in names),
+                any(name.startswith(f"fleet-node-observability-{VERSION}/tests") for name in names),
                 "release artifact must not include development-only tests/",
             )
             self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
@@ -46,7 +47,7 @@ class PackagingContractTests(unittest.TestCase):
             temp_path = Path(temp_dir)
             tarball = temp_path / "bad.tar.gz"
             with tarfile.open(tarball, "w:gz") as archive:
-                for dirname in ("fleet-node-observability-0.1.0", "unexpected-root"):
+                for dirname in (f"fleet-node-observability-{VERSION}", "unexpected-root"):
                     info = tarfile.TarInfo(dirname)
                     info.type = tarfile.DIRTYPE
                     info.mode = 0o755

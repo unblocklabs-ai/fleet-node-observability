@@ -108,6 +108,26 @@ require_uint_range() {
   fi
 }
 
+normalize_bool_flag() {
+  local name="$1"
+  local value="$2"
+  local normalized
+
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    1|true|yes|on)
+      printf '1\n'
+      ;;
+    0|false|no|off)
+      printf '0\n'
+      ;;
+    *)
+      echo "$name must be a boolean value: 1/0, true/false, yes/no, or on/off; got $value" >&2
+      exit 1
+      ;;
+  esac
+}
+
 reject_unsafe_path() {
   local name="$1"
   local path="$2"
@@ -315,6 +335,7 @@ if [[ "${TEXTFILE_DIR:-}" == "" ]]; then
 fi
 require_uint_range "node_exporter_port" "$NODE_EXPORTER_PORT" 1024 65535
 require_uint_range "codex_usage_interval_secs" "$CODEX_USAGE_INTERVAL_SECS" 1 86400
+CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "node_exporter installer currently supports macOS nodes only." >&2

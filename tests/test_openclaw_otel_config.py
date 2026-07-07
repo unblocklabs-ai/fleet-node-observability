@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -127,6 +128,8 @@ class OpenClawOtlpCommandTest(unittest.TestCase):
 
             backup = next(openclaw_config.parent.glob("openclaw.json.bak-fleet-otel-*"), None)
             self.assertIsNotNone(backup)
+            self.assertEqual(stat.S_IMODE(openclaw_config.stat().st_mode), 0o600)
+            self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
 
     def test_configure_command_skips_backup_with_flag(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

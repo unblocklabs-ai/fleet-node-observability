@@ -100,6 +100,26 @@ require_uint_range() {
   fi
 }
 
+normalize_bool_flag() {
+  local name="$1"
+  local value="$2"
+  local normalized
+
+  normalized="$(printf '%s' "$value" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized" in
+    1|true|yes|on)
+      printf '1\n'
+      ;;
+    0|false|no|off)
+      printf '0\n'
+      ;;
+    *)
+      echo "$name must be a boolean value: 1/0, true/false, yes/no, or on/off; got $value" >&2
+      exit 1
+      ;;
+  esac
+}
+
 reject_unsafe_path() {
   local name="$1"
   local path="$2"
@@ -113,16 +133,82 @@ reject_unsafe_path() {
   fi
 }
 
+canonical_managed_path() {
+  local name="$1"
+  local path="$2"
+  local probe
+  local existing
+  local component
+  local parent
+  local base
+  local parent_physical
+  local canonical
+
+  reject_unsafe_path "$name" "$path"
+  probe="$path"
+  while [[ ! -e "$probe" ]]; do
+    parent="$(dirname "$probe")"
+    if [[ "$parent" == "$probe" ]]; then
+      echo "$name has no existing parent: $path" >&2
+      exit 1
+    fi
+    probe="$parent"
+  done
+
+  existing=""
+  while IFS= read -r component; do
+    [[ -z "$component" ]] && continue
+    existing="$existing/$component"
+    if [[ ! -e "$existing" ]]; then
+      break
+    fi
+    if [[ -L "$existing" ]]; then
+      echo "$name must not include symlinked parent directories: $path" >&2
+      exit 1
+    fi
+    parent="$(dirname "$existing")"
+    base="$(basename "$existing")"
+    parent_physical="$(cd -P "$parent" && pwd -P)"
+    if [[ "$parent_physical" == "/" ]]; then
+      canonical="/$base"
+    else
+      canonical="$parent_physical/$base"
+    fi
+    if [[ "$canonical" != "$existing" ]]; then
+      echo "$name must not include symlinked parent directories: $path" >&2
+      exit 1
+    fi
+  done < <(printf '%s\n' "${path#/}" | tr '/' '\n')
+
+  if [[ -d "$probe" ]]; then
+    canonical="$(cd -P "$probe" && pwd -P)"
+  else
+    parent="$(dirname "$probe")"
+    base="$(basename "$probe")"
+    parent_physical="$(cd -P "$parent" && pwd -P)"
+    if [[ "$parent_physical" == "/" ]]; then
+      canonical="/$base"
+    else
+      canonical="$parent_physical/$base"
+    fi
+  fi
+  printf '%s%s\n' "$canonical" "${path#"$probe"}"
+}
+
 require_allowed_prefix() {
   local name="$1"
   local path="$2"
   shift 2
   local prefix
+  local canonical_path
+  local canonical_prefix
 
-  reject_unsafe_path "$name" "$path"
+  canonical_path="$(canonical_managed_path "$name" "$path")"
   for prefix in "$@"; do
-    case "$path" in
-      "$prefix"|"$prefix"/*)
+    canonical_prefix="$(canonical_managed_path "allowed prefix for $name" "$prefix")"
+    case "$canonical_path" in
+      "$canonical_prefix"|"$canonical_prefix"/*)
+        printf '%s\n' "$canonical_path"
         return 0
         ;;
     esac
@@ -330,6 +416,7 @@ if [[ "${TOKEN_FILE:-}" == "" ]]; then
 fi
 require_uint_range "node_exporter_port" "$NODE_EXPORTER_PORT" 1024 65535
 require_uint_range "codex_usage_interval_secs" "$CODEX_USAGE_INTERVAL_SECS" 1 86400
+CODEX_USAGE_ENABLED="$(normalize_bool_flag "codex_usage_enabled" "$CODEX_USAGE_ENABLED")"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "off-LAN host metrics installer supports macOS nodes only." >&2
@@ -357,6 +444,18 @@ LAUNCHD_DIR="/Library/LaunchDaemons"
 PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 HEADER_NAME="X-Fleet-Scrape-Token"
 
+TEXTFILE_DIR="$(require_allowed_prefix \
+  "node_exporter_textfile_dir" \
+  "$TEXTFILE_DIR" \
+  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
+  "/usr/local/var/lib/node_exporter/textfile_collector" \
+  "$OPENCLAW_DIR/textfile_collector")"
+TOKEN_FILE="$(require_allowed_prefix \
+  "fleet_node_exporter_scrape_token_file" \
+  "$TOKEN_FILE" \
+  "/Library/OpenClaw" \
+  "$SECRET_DIR")"
+
 NODE_EXPORTER_LABEL="com.unblocklabs.node-exporter"
 PROXY_LABEL="com.unblocklabs.node-exporter-proxy"
 CODEX_LABEL="com.unblocklabs.codex-usage-textfile"
@@ -381,18 +480,6 @@ METRICS_INFO="$TEXTFILE_DIR/fleet_node_exporter_install.prom"
 run_as_user() {
   /usr/bin/sudo -H -u "$USER_NAME" env HOME="$USER_HOME" PATH="$PATH_VALUE" "$@"
 }
-
-require_allowed_prefix \
-  "node_exporter_textfile_dir" \
-  "$TEXTFILE_DIR" \
-  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
-  "/usr/local/var/lib/node_exporter/textfile_collector" \
-  "$OPENCLAW_DIR/textfile_collector"
-require_allowed_prefix \
-  "fleet_node_exporter_scrape_token_file" \
-  "$TOKEN_FILE" \
-  "/Library/OpenClaw" \
-  "$SECRET_DIR"
 
 write_plist_header() {
   local path="$1"
@@ -423,6 +510,11 @@ bootout_label() {
   launchctl bootout "gui/$USER_UID/$label" >/dev/null 2>&1 || true
 }
 
+listener_pid_is_managed() {
+  local pid="$1"
+  ps -p "$pid" -o args= | grep -Eq '(^|/)(node_exporter|fleet-node-exporter-proxy)( |$)|node_exporter|fleet-node-exporter-proxy'
+}
+
 kill_tcp_listener() {
   local port="$1"
   local pids
@@ -432,7 +524,7 @@ kill_tcp_listener() {
   fi
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
-    if ! ps -p "$pid" -o args= | grep -Eq '(^|/)(node_exporter|fleet-node-exporter-proxy)( |$)|node_exporter|fleet-node-exporter-proxy'; then
+    if ! listener_pid_is_managed "$pid"; then
       echo "[off-lan-host-metrics] TCP $port is owned by unmanaged pid=$pid; refusing to kill it" >&2
       return 1
     fi
@@ -449,6 +541,10 @@ kill_tcp_listener() {
   fi
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
+    if ! listener_pid_is_managed "$pid"; then
+      echo "[off-lan-host-metrics] TCP $port now has unmanaged pid=$pid after graceful stop; skipping SIGKILL" >&2
+      continue
+    fi
     kill -9 "$pid" >/dev/null 2>&1 || true
   done <<<"$pids"
 }
@@ -466,6 +562,17 @@ disable_user_launchagent_plist() {
 }
 
 mkdir -p "$TEXTFILE_DIR" "$OPENCLAW_DIR" "$SECRET_DIR" "$LOG_DIR"
+TEXTFILE_DIR="$(require_allowed_prefix \
+  "node_exporter_textfile_dir" \
+  "$TEXTFILE_DIR" \
+  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
+  "/usr/local/var/lib/node_exporter/textfile_collector" \
+  "$OPENCLAW_DIR/textfile_collector")"
+TOKEN_FILE="$(require_allowed_prefix \
+  "fleet_node_exporter_scrape_token_file" \
+  "$TOKEN_FILE" \
+  "/Library/OpenClaw" \
+  "$SECRET_DIR")"
 install_runtime_tree "$RUNTIME_DIR" "$RUNTIME_BIN_DIR" "$RUNTIME_SRC_DIR"
 chown "$USER_NAME" "$TEXTFILE_DIR"
 chown -R "$USER_NAME" "$OPENCLAW_DIR" "$LOG_DIR" "$RUNTIME_DIR"

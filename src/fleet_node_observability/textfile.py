@@ -11,21 +11,13 @@ from typing import Any
 def escape_label_value(value: Any) -> str:
     """Escape a Prometheus label value."""
     text = str(value)
-    return text.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace('"', '\\"')
-
-
-def render_labels(labels: dict[str, Any]) -> str:
-    if not labels:
-        return ""
-    sorted_items = ",".join(
-        f'{name}="{escape_label_value(value)}"' for name, value in sorted(labels.items())
+    return (
+        text.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+        .replace("\r", "\\r")
+        .replace('"', '\\"')
     )
-    return "{" + sorted_items + "}"
-
-
-def render_gauge_metric(name: str, value: int | float, labels: dict[str, Any] | None = None) -> str:
-    label_suffix = render_labels(labels or {})
-    return f"{name}{label_suffix} {value}"
 
 
 def write_textfile_atomic(path: Path, content: str, *, mode: int = 0o644) -> None:

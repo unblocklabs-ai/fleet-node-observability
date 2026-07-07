@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import os
 import sys
 import urllib.error
@@ -51,7 +52,8 @@ class MetricsProxy(BaseHTTPRequestHandler):
             print(str(exc), file=sys.stderr)
             self.send_error(503)
             return
-        if self.headers.get(HEADER_NAME) != token:
+        token_headers = self.headers.get_all(HEADER_NAME, [])
+        if len(token_headers) != 1 or not hmac.compare_digest(token_headers[0], token):
             self.send_error(403)
             return
         upstream = f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}/metrics"

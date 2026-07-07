@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import importlib.util
 import socket
 import sys
@@ -64,7 +65,7 @@ class ProxyTokenAuthTests(unittest.TestCase):
         proxy.UPSTREAM_HOST = "127.0.0.1"
         proxy.UPSTREAM_PORT = 9100
         proxy.PROXY_HOST = "127.0.0.1"
-        proxy.PROXY_PORT = free_port()
+        proxy.PROXY_PORT = 19100
         self.token = "node-exporter-token"
 
     def _start_upstream(self, upstream_port: int):
@@ -126,6 +127,32 @@ class ProxyTokenAuthTests(unittest.TestCase):
                     urllib.request.urlopen(req, timeout=2)
             exc.exception.close()
             self.assertEqual(exc.exception.code, 403)
+
+    def test_request_with_duplicate_token_headers_is_forbidden(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token_file = Path(temp_dir) / "token.txt"
+            token_file.write_text(self.token)
+            proxy.TOKEN_FILE = token_file
+
+            upstream_port = free_port()
+            proxy.UPSTREAM_PORT = upstream_port
+            upstream = self._start_upstream(upstream_port)
+
+            proxy_port = free_port()
+            proxy.PROXY_PORT = proxy_port
+            proxy_server = proxy.ThreadingHTTPServer((proxy.PROXY_HOST, proxy_port), proxy.MetricsProxy)
+
+            with running_server(upstream), running_server(proxy_server):
+                conn = http.client.HTTPConnection(proxy.PROXY_HOST, proxy_port, timeout=2)
+                conn.putrequest("GET", "/metrics")
+                conn.putheader(proxy.HEADER_NAME, self.token)
+                conn.putheader(proxy.HEADER_NAME, self.token)
+                conn.endheaders()
+                response = conn.getresponse()
+                response.read()
+                conn.close()
+
+            self.assertEqual(response.status, 403)
 
     def test_request_to_invalid_path_is_404(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

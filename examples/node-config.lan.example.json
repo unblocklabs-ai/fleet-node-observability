@@ -6,6 +6,7 @@
   "node_exporter_port": 9100,
   "node_exporter_tunnel_hostname": "",
   "openclaw_ready_url": "http://127.0.0.1:18789/readyz",
+  "otlp_http_endpoint": "http://192.168.10.11:4318",
   "openclaw_service_name": "openclaw_gateway",
   "openclaw_config_path": "~/.openclaw/openclaw.json",
   "node_exporter_textfile_dir": "/opt/homebrew/var/lib/node_exporter/textfile_collector",

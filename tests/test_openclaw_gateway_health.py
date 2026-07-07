@@ -111,6 +111,19 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
         self.assertIn('"event_type":"gateway_ready"', result.stdout)
         self.assertIn('"gateway_ready":true', result.stdout)
 
+    def test_status_json_escapes_control_characters(self) -> None:
+        result = self.run_script("status", "http://127.0.0.1:9/readyz\nwith\tcontrols", "mini_03")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"gateway_ready_url":"http://127.0.0.1:9/readyz\\nwith\\tcontrols"', result.stdout)
+
+    def test_prometheus_labels_escape_control_characters(self) -> None:
+        result = self.run_script("prometheus", "http://127.0.0.1:9/readyz\nwith\tcontrols", "mini\n03")
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('node="mini\\n03"', result.stdout)
+        self.assertIn('gateway_ready_url="http://127.0.0.1:9/readyz\\nwith\\tcontrols"', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

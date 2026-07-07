@@ -6,7 +6,6 @@ from pathlib import Path
 
 
 DEFAULT_OPENCLAW_CONFIG_PATH = Path.home() / ".openclaw" / "openclaw.json"
-DEFAULT_NODE_EXPORTER_TEXTFILE_DIR = Path("/opt/homebrew/var/lib/node_exporter/textfile_collector")
 DEFAULT_NODE_EXPORTER_SCRAPE_TOKEN_FILE = Path("/Library/OpenClaw/fleet-node-exporter-scrape-token")
 
 
