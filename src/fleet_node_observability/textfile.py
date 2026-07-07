@@ -17,7 +17,7 @@ def escape_label_value(value: Any) -> str:
 def render_labels(labels: dict[str, Any]) -> str:
     if not labels:
         return ""
-    sorted_items = ", ".join(
+    sorted_items = ",".join(
         f'{name}="{escape_label_value(value)}"' for name, value in sorted(labels.items())
     )
     return "{" + sorted_items + "}"

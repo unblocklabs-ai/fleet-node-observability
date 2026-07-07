@@ -9,7 +9,6 @@ import os
 import select
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import urllib.error
@@ -17,6 +16,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from fleet_node_observability.textfile import escape_label_value, write_textfile_atomic
 
 
 CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
@@ -89,7 +90,7 @@ def optional_text(value: Any) -> str | None:
 
 
 def escape_prom_label(value: Any) -> str:
-    return clean_text(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    return escape_label_value(clean_text(value))
 
 
 def prom_labels(labels: dict[str, Any]) -> str:
@@ -706,13 +707,6 @@ def prometheus_output(payload: dict[str, Any]) -> str:
         if sample:
             samples.append(sample)
     return "\n".join(help_lines + samples) + "\n"
-
-
-def write_textfile_atomic(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(content)
-    os.replace(tmp_path, path)
 
 
 def collect(source: str, codex_home: Path, timeout: float, max_jsonl_files: int) -> dict[str, Any]:

@@ -86,7 +86,6 @@ include_paths=(
   "docs"
   "examples"
   "packaging"
-  "tests"
 )
 
 for path in "${include_paths[@]}"; do

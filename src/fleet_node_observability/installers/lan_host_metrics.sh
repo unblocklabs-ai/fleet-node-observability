@@ -84,6 +84,100 @@ for key in keys:
 PY
 }
 
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+prom_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+require_uint_range() {
+  local name="$1"
+  local value="$2"
+  local min="$3"
+  local max="$4"
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || (( value < min || value > max )); then
+    echo "$name must be an integer between $min and $max: $value" >&2
+    exit 1
+  fi
+}
+
+reject_unsafe_path() {
+  local name="$1"
+  local path="$2"
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" || "$path" == *"/../"* || "$path" == ../* || "$path" == *"/.." ]]; then
+    echo "$name must be an absolute safe path without parent-directory segments: $path" >&2
+    exit 1
+  fi
+  if [[ -L "$path" ]]; then
+    echo "$name must not be a symlink: $path" >&2
+    exit 1
+  fi
+}
+
+canonical_existing_dir() {
+  local name="$1"
+  local path="$2"
+  local parent
+  local base
+  local canonical
+
+  reject_unsafe_path "$name" "$path"
+  if [[ ! -d "$path" ]]; then
+    echo "$name does not exist: $path" >&2
+    exit 1
+  fi
+  parent="$(dirname "$path")"
+  base="$(basename "$path")"
+  canonical="$(cd "$parent" && printf '%s/%s\n' "$(pwd -P)" "$base")"
+  if [[ "$canonical" != "$path" ]]; then
+    echo "$name must not include symlinked parent directories: $path" >&2
+    exit 1
+  fi
+  printf '%s\n' "$canonical"
+}
+
+system_home_for_user() {
+  local user_name="$1"
+  local user_home
+
+  user_home="$(dscl . -read "/Users/$user_name" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
+  if [[ -z "$user_home" ]]; then
+    echo "Unable to resolve system home for $user_name." >&2
+    exit 1
+  fi
+  canonical_existing_dir "system home for $user_name" "$user_home"
+}
+
+resolve_node_home() {
+  local user_name="$1"
+  local configured_home="$2"
+  local expected_home
+  local resolved_home
+
+  if ! id "$user_name" >/dev/null 2>&1; then
+    echo "Target user $user_name does not exist." >&2
+    exit 1
+  fi
+
+  expected_home="$(system_home_for_user "$user_name")"
+  if [[ -z "$configured_home" ]]; then
+    configured_home="$expected_home"
+  fi
+  resolved_home="$(canonical_existing_dir "node_home" "$configured_home")"
+  if [[ "$resolved_home" != "$expected_home" ]]; then
+    echo "node_home must match the system home for $user_name: $expected_home" >&2
+    exit 1
+  fi
+  printf '%s\n' "$resolved_home"
+}
+
 install_runtime_tree() {
   local runtime_dir="$1"
   local runtime_bin_dir="$2"
@@ -201,10 +295,6 @@ if [[ -z "$NODE_USER" ]]; then
   echo "node user is required; pass --node-user or set node_user in --config." >&2
   exit 1
 fi
-if [[ -z "$NODE_HOME" ]]; then
-  NODE_HOME="/Users/${NODE_USER}"
-fi
-
 if [[ "${NODE_EXPORTER_PORT:-}" == "" ]]; then
   NODE_EXPORTER_PORT="9100"
 fi
@@ -223,11 +313,14 @@ fi
 if [[ "${TEXTFILE_DIR:-}" == "" ]]; then
   TEXTFILE_DIR="/opt/homebrew/var/lib/node_exporter/textfile_collector"
 fi
+require_uint_range "node_exporter_port" "$NODE_EXPORTER_PORT" 1024 65535
+require_uint_range "codex_usage_interval_secs" "$CODEX_USAGE_INTERVAL_SECS" 1 86400
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "node_exporter installer currently supports macOS nodes only." >&2
   exit 1
 fi
+NODE_HOME="$(resolve_node_home "$NODE_USER" "$NODE_HOME")"
 
 if [[ "$(whoami)" != "$NODE_USER" && "$FORCE_USER" -ne 1 ]]; then
   echo "Refusing to install node_exporter for $NODE as user $(whoami); expected $NODE_USER." >&2
@@ -279,7 +372,7 @@ install_runtime_tree "$RUNTIME_DIR" "$RUNTIME_BIN_DIR" "$RUNTIME_SRC_DIR"
 cat >"$METRICS_INFO" <<EOF
 # HELP fleet_node_exporter_textfile_install_info node_exporter textfile collector install metadata.
 # TYPE fleet_node_exporter_textfile_install_info gauge
-fleet_node_exporter_textfile_install_info{node="$NODE"} 1
+fleet_node_exporter_textfile_install_info{node="$(prom_escape "$NODE")"} 1
 EOF
 
 if "$BREW_BIN" services list 2>/dev/null | awk '$1 == "node_exporter" && $2 == "started" { found = 1 } END { exit found ? 0 : 1 }'; then
@@ -293,21 +386,21 @@ cat >"$NODE_EXPORTER_PLIST" <<EOF
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$NODE_EXPORTER_LABEL</string>
+  <string>$(xml_escape "$NODE_EXPORTER_LABEL")</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$NODE_EXPORTER_BIN</string>
-    <string>--web.listen-address=$NODE_EXPORTER_LISTEN_ADDRESS</string>
-    <string>--collector.textfile.directory=$TEXTFILE_DIR</string>
+    <string>$(xml_escape "$NODE_EXPORTER_BIN")</string>
+    <string>$(xml_escape "--web.listen-address=$NODE_EXPORTER_LISTEN_ADDRESS")</string>
+    <string>$(xml_escape "--collector.textfile.directory=$TEXTFILE_DIR")</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/$NODE_EXPORTER_LABEL.out.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$NODE_EXPORTER_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/$NODE_EXPORTER_LABEL.err.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$NODE_EXPORTER_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -330,27 +423,27 @@ if [[ "$CODEX_USAGE_ENABLED" == "1" ]]; then
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$CODEX_LABEL</string>
+  <string>$(xml_escape "$CODEX_LABEL")</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$CODEX_COLLECTOR</string>
+    <string>$(xml_escape "$CODEX_COLLECTOR")</string>
     <string>--node</string>
-    <string>$NODE</string>
+    <string>$(xml_escape "$NODE")</string>
     <string>--profile</string>
-    <string>$CODEX_PROFILE</string>
+    <string>$(xml_escape "$CODEX_PROFILE")</string>
     <string>--format</string>
     <string>prometheus</string>
     <string>--output</string>
-    <string>$CODEX_TEXTFILE</string>
+    <string>$(xml_escape "$CODEX_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>$CODEX_USAGE_INTERVAL_SECS</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/$CODEX_LABEL.out.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$CODEX_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/$CODEX_LABEL.err.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$CODEX_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -371,23 +464,23 @@ cat >"$GATEWAY_PLIST" <<EOF
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$GATEWAY_LABEL</string>
+  <string>$(xml_escape "$GATEWAY_LABEL")</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$GATEWAY_HEALTH</string>
+    <string>$(xml_escape "$GATEWAY_HEALTH")</string>
     <string>prometheus</string>
-    <string>$OPENCLAW_READY_URL</string>
-    <string>$NODE</string>
-    <string>$GATEWAY_TEXTFILE</string>
+    <string>$(xml_escape "$OPENCLAW_READY_URL")</string>
+    <string>$(xml_escape "$NODE")</string>
+    <string>$(xml_escape "$GATEWAY_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/$GATEWAY_LABEL.out.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$GATEWAY_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/$GATEWAY_LABEL.err.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$GATEWAY_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -403,23 +496,23 @@ cat >"$THERMAL_PLIST" <<EOF
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$THERMAL_LABEL</string>
+  <string>$(xml_escape "$THERMAL_LABEL")</string>
   <key>ProgramArguments</key>
   <array>
-    <string>$THERMAL_COLLECTOR</string>
+    <string>$(xml_escape "$THERMAL_COLLECTOR")</string>
     <string>--node</string>
-    <string>$NODE</string>
+    <string>$(xml_escape "$NODE")</string>
     <string>--output</string>
-    <string>$THERMAL_TEXTFILE</string>
+    <string>$(xml_escape "$THERMAL_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>60</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>$HOME/Library/Logs/$THERMAL_LABEL.out.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$THERMAL_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$HOME/Library/Logs/$THERMAL_LABEL.err.log</string>
+  <string>$(xml_escape "$HOME/Library/Logs/$THERMAL_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF

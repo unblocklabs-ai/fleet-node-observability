@@ -99,7 +99,6 @@ src/fleet_node_observability/
   config.py
   otlp.py
   textfile.py
-  platform.py
   paths.py
   commands/
     __init__.py
@@ -440,7 +439,6 @@ fleet-node-observability/
       config.py
       otlp.py
       textfile.py
-      platform.py
       paths.py
       commands/
         __init__.py

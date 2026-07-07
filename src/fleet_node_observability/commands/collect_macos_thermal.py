@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
+
+from fleet_node_observability.textfile import escape_label_value, write_textfile_atomic
 
 
 LEVELS = {
@@ -24,7 +24,7 @@ LEVELS = {
 
 
 def escape_label(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+    return escape_label_value(value)
 
 
 def labels(**kwargs: str) -> str:
@@ -96,13 +96,6 @@ def render(node: str, source: str, now: int | None = None) -> str:
             ]
         )
     return "\n".join(lines) + "\n"
-
-
-def write_textfile_atomic(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(content)
-    os.replace(tmp, path)
 
 
 def main() -> int:

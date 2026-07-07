@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import subprocess
 import tarfile
 import tempfile
@@ -11,18 +12,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackagingContractTests(unittest.TestCase):
+    def build_release(self, output_dir: Path) -> Path:
+        result = subprocess.run(
+            [str(ROOT / "packaging" / "build-release.sh"), "--output", str(output_dir)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return output_dir / "fleet-node-observability-0.1.0.tar.gz"
+
     def test_build_release_excludes_scripts_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            result = subprocess.run(
-                [str(ROOT / "packaging" / "build-release.sh"), "--output", temp_dir],
-                cwd=ROOT,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
+            tarball = self.build_release(Path(temp_dir))
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            tarball = Path(temp_dir) / "fleet-node-observability-0.1.0.tar.gz"
             self.assertTrue(tarball.exists())
             with tarfile.open(tarball) as archive:
                 names = archive.getnames()
@@ -30,6 +34,10 @@ class PackagingContractTests(unittest.TestCase):
             self.assertFalse(
                 any(name.startswith("fleet-node-observability-0.1.0/scripts") for name in names),
                 "release artifact must not include the broad legacy scripts/ path",
+            )
+            self.assertFalse(
+                any(name.startswith("fleet-node-observability-0.1.0/tests") for name in names),
+                "release artifact must not include development-only tests/",
             )
             self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
 
@@ -50,7 +58,7 @@ class PackagingContractTests(unittest.TestCase):
                     "--tarball",
                     str(tarball),
                     "--install-dir",
-                    str(temp_path / "install"),
+                    str(temp_path / "fleet-node-observability"),
                 ],
                 cwd=ROOT,
                 capture_output=True,
@@ -60,6 +68,122 @@ class PackagingContractTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("expected exactly one top-level directory", result.stderr)
+
+    def test_install_from_release_rejects_path_traversal_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = temp_path / "bad-traversal.tar.gz"
+            with tarfile.open(tarball, "w:gz") as archive:
+                payload = b"bad"
+                info = tarfile.TarInfo("../outside")
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(temp_path / "fleet-node-observability"),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Invalid tarball member path", result.stderr)
+            self.assertFalse((temp_path.parent / "outside").exists())
+
+    def test_install_from_release_rejects_dangerous_overwrite_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tarball = Path(temp_dir) / "placeholder.tar.gz"
+            tarball.write_bytes(b"not reached")
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    "/",
+                    "--overwrite",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Refusing dangerous install directory", result.stderr)
+
+    def test_install_from_release_overwrite_removes_hidden_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = self.build_release(temp_path / "dist")
+            install_dir = temp_path / "fleet-node-observability"
+
+            first_result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(install_dir),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+            stale_file = install_dir / ".stale-hidden"
+            stale_file.write_text("stale\n", encoding="utf-8")
+
+            overwrite_result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(install_dir),
+                    "--overwrite",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(overwrite_result.returncode, 0, overwrite_result.stderr)
+            self.assertFalse(stale_file.exists())
+
+    def test_install_from_release_rejects_checksum_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = self.build_release(temp_path / "dist")
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--sha256",
+                    "0" * 64,
+                    "--install-dir",
+                    str(temp_path / "fleet-node-observability"),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("SHA256 mismatch", result.stderr)
 
 
 if __name__ == "__main__":

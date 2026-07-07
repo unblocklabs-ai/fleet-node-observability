@@ -76,6 +76,118 @@ for key in keys:
 PY
 }
 
+xml_escape() {
+  printf '%s' "$1" | sed \
+    -e 's/&/\&amp;/g' \
+    -e 's/</\&lt;/g' \
+    -e 's/>/\&gt;/g' \
+    -e 's/"/\&quot;/g' \
+    -e "s/'/\&apos;/g"
+}
+
+prom_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+require_uint_range() {
+  local name="$1"
+  local value="$2"
+  local min="$3"
+  local max="$4"
+  if ! [[ "$value" =~ ^[0-9]+$ ]] || (( value < min || value > max )); then
+    echo "$name must be an integer between $min and $max: $value" >&2
+    exit 1
+  fi
+}
+
+reject_unsafe_path() {
+  local name="$1"
+  local path="$2"
+  if [[ -z "$path" || "$path" != /* || "$path" == "/" || "$path" == *"/../"* || "$path" == ../* || "$path" == *"/.." ]]; then
+    echo "$name must be an absolute safe path without parent-directory segments: $path" >&2
+    exit 1
+  fi
+  if [[ -L "$path" ]]; then
+    echo "$name must not be a symlink: $path" >&2
+    exit 1
+  fi
+}
+
+require_allowed_prefix() {
+  local name="$1"
+  local path="$2"
+  shift 2
+  local prefix
+
+  reject_unsafe_path "$name" "$path"
+  for prefix in "$@"; do
+    case "$path" in
+      "$prefix"|"$prefix"/*)
+        return 0
+        ;;
+    esac
+  done
+  echo "$name is outside allowed managed paths: $path" >&2
+  exit 1
+}
+
+canonical_existing_dir() {
+  local name="$1"
+  local path="$2"
+  local parent
+  local base
+  local canonical
+
+  reject_unsafe_path "$name" "$path"
+  if [[ ! -d "$path" ]]; then
+    echo "$name does not exist: $path" >&2
+    exit 1
+  fi
+  parent="$(dirname "$path")"
+  base="$(basename "$path")"
+  canonical="$(cd "$parent" && printf '%s/%s\n' "$(pwd -P)" "$base")"
+  if [[ "$canonical" != "$path" ]]; then
+    echo "$name must not include symlinked parent directories: $path" >&2
+    exit 1
+  fi
+  printf '%s\n' "$canonical"
+}
+
+system_home_for_user() {
+  local user_name="$1"
+  local user_home
+
+  user_home="$(dscl . -read "/Users/$user_name" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
+  if [[ -z "$user_home" ]]; then
+    echo "Unable to resolve system home for $user_name." >&2
+    exit 1
+  fi
+  canonical_existing_dir "system home for $user_name" "$user_home"
+}
+
+resolve_node_home() {
+  local user_name="$1"
+  local configured_home="$2"
+  local expected_home
+  local resolved_home
+
+  if ! id "$user_name" >/dev/null 2>&1; then
+    echo "Target user $user_name does not exist." >&2
+    exit 1
+  fi
+
+  expected_home="$(system_home_for_user "$user_name")"
+  if [[ -z "$configured_home" ]]; then
+    configured_home="$expected_home"
+  fi
+  resolved_home="$(canonical_existing_dir "node_home" "$configured_home")"
+  if [[ "$resolved_home" != "$expected_home" ]]; then
+    echo "node_home must match the system home for $user_name: $expected_home" >&2
+    exit 1
+  fi
+  printf '%s\n' "$resolved_home"
+}
+
 install_runtime_tree() {
   local runtime_dir="$1"
   local runtime_bin_dir="$2"
@@ -195,11 +307,6 @@ if [[ "${TUNNEL_HOSTNAME:-}" == "" ]]; then
   echo "node_exporter_tunnel_hostname is required for off-LAN." >&2
   exit 1
 fi
-if [[ "${NODE_HOME:-}" == "" ]]; then
-  USER_HOME="/Users/${USER_NAME}"
-else
-  USER_HOME="$NODE_HOME"
-fi
 if [[ "${NODE_EXPORTER_PORT:-}" == "" ]]; then
   NODE_EXPORTER_PORT="9100"
 fi
@@ -221,6 +328,8 @@ fi
 if [[ "${TOKEN_FILE:-}" == "" ]]; then
   TOKEN_FILE="/Library/OpenClaw/fleet-node-exporter-scrape-token"
 fi
+require_uint_range "node_exporter_port" "$NODE_EXPORTER_PORT" 1024 65535
+require_uint_range "codex_usage_interval_secs" "$CODEX_USAGE_INTERVAL_SECS" 1 86400
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "off-LAN host metrics installer supports macOS nodes only." >&2
@@ -230,14 +339,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "This installer must run as root because it writes /Library/LaunchDaemons." >&2
   exit 1
 fi
-if ! id "$USER_NAME" >/dev/null 2>&1; then
-  echo "Target user $USER_NAME does not exist." >&2
-  exit 1
-fi
-if [[ ! -d "$USER_HOME" ]]; then
-  echo "Target home $USER_HOME does not exist." >&2
-  exit 1
-fi
+USER_HOME="$(resolve_node_home "$USER_NAME" "$USER_HOME")"
 if ! command -v lsof >/dev/null 2>&1; then
   echo "lsof is required to clear stale node_exporter/proxy listeners before install." >&2
   exit 1
@@ -280,6 +382,18 @@ run_as_user() {
   /usr/bin/sudo -H -u "$USER_NAME" env HOME="$USER_HOME" PATH="$PATH_VALUE" "$@"
 }
 
+require_allowed_prefix \
+  "node_exporter_textfile_dir" \
+  "$TEXTFILE_DIR" \
+  "/opt/homebrew/var/lib/node_exporter/textfile_collector" \
+  "/usr/local/var/lib/node_exporter/textfile_collector" \
+  "$OPENCLAW_DIR/textfile_collector"
+require_allowed_prefix \
+  "fleet_node_exporter_scrape_token_file" \
+  "$TOKEN_FILE" \
+  "/Library/OpenClaw" \
+  "$SECRET_DIR"
+
 write_plist_header() {
   local path="$1"
   local label="$2"
@@ -289,9 +403,9 @@ write_plist_header() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>$label</string>
+  <string>$(xml_escape "$label")</string>
   <key>UserName</key>
-  <string>$USER_NAME</string>
+  <string>$(xml_escape "$USER_NAME")</string>
 EOF
 }
 
@@ -316,6 +430,13 @@ kill_tcp_listener() {
   if [[ -z "$pids" ]]; then
     return 0
   fi
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if ! ps -p "$pid" -o args= | grep -Eq '(^|/)(node_exporter|fleet-node-exporter-proxy)( |$)|node_exporter|fleet-node-exporter-proxy'; then
+      echo "[off-lan-host-metrics] TCP $port is owned by unmanaged pid=$pid; refusing to kill it" >&2
+      return 1
+    fi
+  done <<<"$pids"
   echo "[off-lan-host-metrics] stopping stale listener(s) on TCP $port: ${pids//$'\n'/ }"
   while IFS= read -r pid; do
     [[ -z "$pid" ]] && continue
@@ -346,7 +467,8 @@ disable_user_launchagent_plist() {
 
 mkdir -p "$TEXTFILE_DIR" "$OPENCLAW_DIR" "$SECRET_DIR" "$LOG_DIR"
 install_runtime_tree "$RUNTIME_DIR" "$RUNTIME_BIN_DIR" "$RUNTIME_SRC_DIR"
-chown -R "$USER_NAME" "$TEXTFILE_DIR" "$OPENCLAW_DIR" "$LOG_DIR" "$RUNTIME_DIR"
+chown "$USER_NAME" "$TEXTFILE_DIR"
+chown -R "$USER_NAME" "$OPENCLAW_DIR" "$LOG_DIR" "$RUNTIME_DIR"
 chmod 0700 "$SECRET_DIR"
 
 if [[ ! -s "$TOKEN_FILE" ]]; then
@@ -360,7 +482,7 @@ chmod 0600 "$TOKEN_FILE"
 cat >"$METRICS_INFO" <<EOF
 # HELP fleet_node_exporter_textfile_install_info node_exporter textfile collector install metadata.
 # TYPE fleet_node_exporter_textfile_install_info gauge
-fleet_node_exporter_textfile_install_info{node="$NODE"} 1
+fleet_node_exporter_textfile_install_info{node="$(prom_escape "$NODE")"} 1
 EOF
 chown "$USER_NAME" "$METRICS_INFO"
 
@@ -385,9 +507,9 @@ write_plist_header "$NODE_EXPORTER_PLIST" "$NODE_EXPORTER_LABEL"
 cat >>"$NODE_EXPORTER_PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
-    <string>$NODE_EXPORTER_BIN</string>
-    <string>--web.listen-address=127.0.0.1:$NODE_EXPORTER_PORT</string>
-    <string>--collector.textfile.directory=$TEXTFILE_DIR</string>
+    <string>$(xml_escape "$NODE_EXPORTER_BIN")</string>
+    <string>$(xml_escape "--web.listen-address=127.0.0.1:$NODE_EXPORTER_PORT")</string>
+    <string>$(xml_escape "--collector.textfile.directory=$TEXTFILE_DIR")</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -396,14 +518,14 @@ cat >>"$NODE_EXPORTER_PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$USER_HOME</string>
+    <string>$(xml_escape "$USER_HOME")</string>
     <key>PATH</key>
-    <string>$PATH_VALUE</string>
+    <string>$(xml_escape "$PATH_VALUE")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/$NODE_EXPORTER_LABEL.out.log</string>
+  <string>$(xml_escape "$LOG_DIR/$NODE_EXPORTER_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/$NODE_EXPORTER_LABEL.err.log</string>
+  <string>$(xml_escape "$LOG_DIR/$NODE_EXPORTER_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -413,7 +535,7 @@ write_plist_header "$PROXY_PLIST" "$PROXY_LABEL"
 cat >>"$PROXY_PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
-    <string>$PROXY_SCRIPT</string>
+    <string>$(xml_escape "$PROXY_SCRIPT")</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -422,16 +544,16 @@ cat >>"$PROXY_PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$USER_HOME</string>
+    <string>$(xml_escape "$USER_HOME")</string>
     <key>PATH</key>
-    <string>$PATH_VALUE</string>
+    <string>$(xml_escape "$PATH_VALUE")</string>
     <key>FLEET_NODE_EXPORTER_SCRAPE_TOKEN_FILE</key>
-    <string>$TOKEN_FILE</string>
+    <string>$(xml_escape "$TOKEN_FILE")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/$PROXY_LABEL.out.log</string>
+  <string>$(xml_escape "$LOG_DIR/$PROXY_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/$PROXY_LABEL.err.log</string>
+  <string>$(xml_escape "$LOG_DIR/$PROXY_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -443,15 +565,15 @@ if [[ "$CODEX_USAGE_ENABLED" == "1" ]]; then
   cat >>"$CODEX_PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
-    <string>$CODEX_COLLECTOR</string>
+    <string>$(xml_escape "$CODEX_COLLECTOR")</string>
     <string>--node</string>
-    <string>$NODE</string>
+    <string>$(xml_escape "$NODE")</string>
     <string>--profile</string>
-    <string>$CODEX_PROFILE</string>
+    <string>$(xml_escape "$CODEX_PROFILE")</string>
     <string>--format</string>
     <string>prometheus</string>
     <string>--output</string>
-    <string>$CODEX_TEXTFILE</string>
+    <string>$(xml_escape "$CODEX_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>$CODEX_USAGE_INTERVAL_SECS</integer>
@@ -460,14 +582,14 @@ if [[ "$CODEX_USAGE_ENABLED" == "1" ]]; then
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$USER_HOME</string>
+    <string>$(xml_escape "$USER_HOME")</string>
     <key>PATH</key>
-    <string>$PATH_VALUE</string>
+    <string>$(xml_escape "$PATH_VALUE")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/$CODEX_LABEL.out.log</string>
+  <string>$(xml_escape "$LOG_DIR/$CODEX_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/$CODEX_LABEL.err.log</string>
+  <string>$(xml_escape "$LOG_DIR/$CODEX_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -481,11 +603,11 @@ write_plist_header "$GATEWAY_PLIST" "$GATEWAY_LABEL"
 cat >>"$GATEWAY_PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
-    <string>$GATEWAY_HEALTH</string>
+    <string>$(xml_escape "$GATEWAY_HEALTH")</string>
     <string>prometheus</string>
-    <string>$OPENCLAW_READY_URL</string>
-    <string>$NODE</string>
-    <string>$GATEWAY_TEXTFILE</string>
+    <string>$(xml_escape "$OPENCLAW_READY_URL")</string>
+    <string>$(xml_escape "$NODE")</string>
+    <string>$(xml_escape "$GATEWAY_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>60</integer>
@@ -494,14 +616,14 @@ cat >>"$GATEWAY_PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$USER_HOME</string>
+    <string>$(xml_escape "$USER_HOME")</string>
     <key>PATH</key>
-    <string>$PATH_VALUE</string>
+    <string>$(xml_escape "$PATH_VALUE")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/$GATEWAY_LABEL.out.log</string>
+  <string>$(xml_escape "$LOG_DIR/$GATEWAY_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/$GATEWAY_LABEL.err.log</string>
+  <string>$(xml_escape "$LOG_DIR/$GATEWAY_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF
@@ -512,11 +634,11 @@ write_plist_header "$THERMAL_PLIST" "$THERMAL_LABEL"
 cat >>"$THERMAL_PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
-    <string>$THERMAL_COLLECTOR</string>
+    <string>$(xml_escape "$THERMAL_COLLECTOR")</string>
     <string>--node</string>
-    <string>$NODE</string>
+    <string>$(xml_escape "$NODE")</string>
     <string>--output</string>
-    <string>$THERMAL_TEXTFILE</string>
+    <string>$(xml_escape "$THERMAL_TEXTFILE")</string>
   </array>
   <key>StartInterval</key>
   <integer>60</integer>
@@ -525,14 +647,14 @@ cat >>"$THERMAL_PLIST" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>$USER_HOME</string>
+    <string>$(xml_escape "$USER_HOME")</string>
     <key>PATH</key>
-    <string>$PATH_VALUE</string>
+    <string>$(xml_escape "$PATH_VALUE")</string>
   </dict>
   <key>StandardOutPath</key>
-  <string>$LOG_DIR/$THERMAL_LABEL.out.log</string>
+  <string>$(xml_escape "$LOG_DIR/$THERMAL_LABEL.out.log")</string>
   <key>StandardErrorPath</key>
-  <string>$LOG_DIR/$THERMAL_LABEL.err.log</string>
+  <string>$(xml_escape "$LOG_DIR/$THERMAL_LABEL.err.log")</string>
 </dict>
 </plist>
 EOF

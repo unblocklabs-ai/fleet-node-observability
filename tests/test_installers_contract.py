@@ -62,9 +62,9 @@ class LanInstallerContractTest(unittest.TestCase):
             "CODEX_COLLECTOR=\"$RUNTIME_BIN_DIR/collect-codex-usage\"",
             "GATEWAY_HEALTH=\"$RUNTIME_BIN_DIR/openclaw-gateway-health\"",
             "THERMAL_COLLECTOR=\"$RUNTIME_BIN_DIR/collect-macos-thermal\"",
-            '<string>$CODEX_COLLECTOR</string>',
-            '<string>$GATEWAY_HEALTH</string>',
-            '<string>$THERMAL_COLLECTOR</string>',
+            '<string>$(xml_escape "$CODEX_COLLECTOR")</string>',
+            '<string>$(xml_escape "$GATEWAY_HEALTH")</string>',
+            '<string>$(xml_escape "$THERMAL_COLLECTOR")</string>',
         ]:
             self.assertIn(required, self.installer)
 
@@ -78,6 +78,27 @@ class LanInstallerContractTest(unittest.TestCase):
     def test_lan_installer_has_macos_guard_and_no_central_inventory_dependency(self) -> None:
         self.assertIn('if [[ "$(uname -s)" != "Darwin" ]]', self.installer)
         self.assertNotIn("fleet/nodes.json", self.installer)
+
+    def test_lan_installer_escapes_plist_and_prometheus_values(self) -> None:
+        for required in [
+            "xml_escape()",
+            "prom_escape()",
+            "require_uint_range \"node_exporter_port\"",
+            'fleet_node_exporter_textfile_install_info{node="$(prom_escape "$NODE")"} 1',
+            '<string>$(xml_escape "$OPENCLAW_READY_URL")</string>',
+        ]:
+            self.assertIn(required, self.installer)
+
+    def test_lan_installer_validates_node_home_against_system_account(self) -> None:
+        for required in [
+            "resolve_node_home()",
+            "system_home_for_user()",
+            "canonical_existing_dir()",
+            "must not include symlinked parent directories",
+            'NODE_HOME="$(resolve_node_home "$NODE_USER" "$NODE_HOME")"',
+            "node_home must match the system home",
+        ]:
+            self.assertIn(required, self.installer)
 
     def test_lan_wrapper_executes_impl(self) -> None:
         self.assertIn("src/fleet_node_observability/installers/lan_host_metrics.sh", self.wrapper)
@@ -128,6 +149,8 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "kill_tcp_listener \"$NODE_EXPORTER_PORT\"",
             "kill_tcp_listener 19100",
             "lsof is required to clear stale node_exporter/proxy listeners before install.",
+            "require_allowed_prefix",
+            "TCP $port is owned by unmanaged pid=$pid; refusing to kill it",
             "http://127.0.0.1:19100/metrics",
             'curl -fsS --max-time 5 -H "X-Fleet-Scrape-Token: $TOKEN" -o "$METRICS_TMP" "http://127.0.0.1:19100/metrics"',
             'fleet-host-metrics-ensure[.]sh|fleet-host-textfiles-refresh[.]sh',
@@ -149,10 +172,10 @@ class OffLanInstallerContractTest(unittest.TestCase):
             "GATEWAY_HEALTH=\"$RUNTIME_BIN_DIR/openclaw-gateway-health\"",
             "THERMAL_COLLECTOR=\"$RUNTIME_BIN_DIR/collect-macos-thermal\"",
             "PROXY_SCRIPT=\"$RUNTIME_BIN_DIR/fleet-node-exporter-proxy\"",
-            '<string>$PROXY_SCRIPT</string>',
-            '<string>$CODEX_COLLECTOR</string>',
-            '<string>$GATEWAY_HEALTH</string>',
-            '<string>$THERMAL_COLLECTOR</string>',
+            '<string>$(xml_escape "$PROXY_SCRIPT")</string>',
+            '<string>$(xml_escape "$CODEX_COLLECTOR")</string>',
+            '<string>$(xml_escape "$GATEWAY_HEALTH")</string>',
+            '<string>$(xml_escape "$THERMAL_COLLECTOR")</string>',
             "pkill -u \"$USER_NAME\" -f 'fleet-node-exporter-proxy[.]py'",
             "pkill -u \"$USER_NAME\" -f 'fleet-node-exporter-proxy$'",
         ]:
@@ -173,6 +196,30 @@ class OffLanInstallerContractTest(unittest.TestCase):
 
     def test_off_lan_installer_has_macos_guard(self) -> None:
         self.assertIn('if [[ "$(uname -s)" != "Darwin" ]]', self.installer)
+
+    def test_off_lan_installer_rejects_unsafe_paths_and_ports(self) -> None:
+        for required in [
+            "reject_unsafe_path()",
+            "require_allowed_prefix",
+            "must not be a symlink",
+            "require_uint_range \"node_exporter_port\"",
+            "require_uint_range \"codex_usage_interval_secs\"",
+            "chown \"$USER_NAME\" \"$TEXTFILE_DIR\"",
+        ]:
+            self.assertIn(required, self.installer)
+        self.assertNotIn('chown -R "$USER_NAME" "$TEXTFILE_DIR"', self.installer)
+
+    def test_off_lan_installer_validates_node_home_against_system_account(self) -> None:
+        for required in [
+            "resolve_node_home()",
+            "system_home_for_user()",
+            "canonical_existing_dir()",
+            "must not include symlinked parent directories",
+            'USER_HOME="$(resolve_node_home "$USER_NAME" "$USER_HOME")"',
+            "node_home must match the system home",
+        ]:
+            self.assertIn(required, self.installer)
+        self.assertNotIn('USER_HOME="/Users/${USER_NAME}"', self.installer)
 
     def test_off_lan_wrapper_executes_impl(self) -> None:
         self.assertIn("src/fleet_node_observability/installers/off_lan_host_metrics.sh", self.wrapper)

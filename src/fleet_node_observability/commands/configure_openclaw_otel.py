@@ -16,7 +16,12 @@ from ..otlp import parse_otlp_headers, otlp_headers
 def load_openclaw_config(path: Path) -> dict:
     if not path.exists():
         return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"{path} contains invalid JSON: {exc}") from exc
+    except OSError as exc:
+        raise ConfigError(f"unable to read {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ConfigError(f"{path} must contain a JSON object")
     return payload
@@ -28,12 +33,18 @@ def write_openclaw_config(path: Path, payload: dict, *, backup: bool) -> Path | 
     backup_path = None
     if backup and path.exists():
         backup_path = path.with_name(f"{path.name}.bak-fleet-otel-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
-        backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            backup_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError as exc:
+            raise ConfigError(f"unable to create backup {backup_path}: {exc}") from exc
 
     updated_payload = json.dumps(payload, indent=2, sort_keys=False) + "\n"
     tmp_path = path.with_name(f"{path.name}.tmp")
-    tmp_path.write_text(updated_payload, encoding="utf-8")
-    os.replace(tmp_path, path)
+    try:
+        tmp_path.write_text(updated_payload, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except OSError as exc:
+        raise ConfigError(f"unable to write {path}: {exc}") from exc
     return backup_path
 
 
@@ -156,8 +167,12 @@ def main(argv: list[str] | None = None) -> int:
 
     headers = parse_otlp_headers(encoded_headers)
     output_path = resolved.openclaw_config_path
-    payload = apply_diagnostics_payload(load_openclaw_config(output_path), endpoint=resolved.endpoint, service_name=resolved.service_name, headers=headers)
-    backup_path = write_openclaw_config(output_path, payload, backup=not args.no_backup)
+    try:
+        payload = apply_diagnostics_payload(load_openclaw_config(output_path), endpoint=resolved.endpoint, service_name=resolved.service_name, headers=headers)
+        backup_path = write_openclaw_config(output_path, payload, backup=not args.no_backup)
+    except ConfigError as exc:
+        print(exc, file=sys.stderr)
+        return 1
 
     print(f"Updated {output_path}")
     if backup_path is not None:

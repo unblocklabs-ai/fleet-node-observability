@@ -28,20 +28,6 @@ def normalize_label(name: str) -> str:
     return normalized
 
 
-def bool_setting(value: Any, default: bool = True) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return bool(value)
-
-
 @dataclass(frozen=True)
 class OpenClawOtlpConfig:
     node_label: str

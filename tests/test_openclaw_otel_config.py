@@ -154,3 +154,28 @@ class OpenClawOtlpCommandTest(unittest.TestCase):
             self.assertNotIn("Backup:", out)
             backup_glob = list(openclaw_config.parent.glob("openclaw.json.bak-fleet-otel-*"))
             self.assertEqual(backup_glob, [])
+
+    def test_configure_command_reports_invalid_openclaw_json_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node_config = Path(tmpdir) / "node-config.json"
+            node_config.write_text(
+                '{"node_label":"mini-03","network":"lan","otlp_http_endpoint":"http://192.168.10.11:4318"}',
+                encoding="utf-8",
+            )
+            openclaw_config = Path(tmpdir) / "openclaw.json"
+            openclaw_config.write_text("{bad json", encoding="utf-8")
+
+            rc, out, err = self._run_configure(
+                [
+                    "--config",
+                    str(node_config),
+                    "--openclaw-config",
+                    str(openclaw_config),
+                    "--token",
+                    "token-1",
+                ]
+            )
+
+            self.assertEqual(rc, 1)
+            self.assertEqual(out, "")
+            self.assertIn("contains invalid JSON", err)

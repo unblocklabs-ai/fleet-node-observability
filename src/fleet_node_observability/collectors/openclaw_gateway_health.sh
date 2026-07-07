@@ -73,7 +73,7 @@ openclaw_gateway_ready{node=\"$(escape_label "$node")\",gateway_ready_url=\"$(es
 "
   if [ -n "$output_path" ]; then
     mkdir -p "$(dirname "$output_path")"
-    tmp_path="${output_path}.tmp"
+    tmp_path="$(mktemp "${output_path}.XXXXXX")"
     printf '%s' "$content" >"$tmp_path"
     mv "$tmp_path" "$output_path"
   else
