@@ -30,11 +30,22 @@ def _read_protected_token(path: Path) -> str:
     if stat.S_IMODE(info.st_mode) & 0o077:
         raise ConfigError("ingest token file must not be readable or writable by group or other")
     try:
-        token = path.read_text(encoding="utf-8").rstrip("\n")
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            contents = handle.read()
     except OSError as exc:
         raise ConfigError(f"unable to read ingest token file: {exc}") from exc
-    if "\n" in token or "\r" in token:
-        raise ConfigError("ingest token file must contain exactly one token line")
+
+    token = contents[:-1] if contents.endswith("\n") else contents
+    if (
+        not token
+        or "\r" in contents
+        or "\n" in token
+        or token != token.strip()
+    ):
+        raise ConfigError(
+            "ingest token file must contain one nonempty token with no surrounding whitespace "
+            "and at most one final LF"
+        )
     return token
 
 
