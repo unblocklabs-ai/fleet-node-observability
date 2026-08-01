@@ -3,6 +3,10 @@
 off-LAN installs are intentionally stricter because the node is not on the same
 LAN as the collector endpoint.
 
+Status: current `0.1.x` compatibility runbook. The selected product direction removes the per-node
+tunnel, scrape proxy, scrape token, Cloudflare Access credentials, and separate off-LAN installer
+after the unified outbound OTLP path is validated.
+
 ## What it configures
 
 - Binds a local `node_exporter` listener (`127.0.0.1`) for token-protected scraping.

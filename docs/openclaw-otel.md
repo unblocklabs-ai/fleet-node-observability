@@ -3,6 +3,11 @@
 `openclaw-otel` tooling prepares OpenClaw local diagnostic shipping in a way
 that is compatible with central Alloy identity normalization.
 
+Status: the commands below describe the `0.1.x` compatibility surface. In `0.2.0`,
+`configure-openclaw-local-otel --config <node-agent.json>` writes only the loopback endpoint and no
+headers. `install-fleet-node-agent` runs it after proving the Collector is healthy. The Collector,
+not OpenClaw, owns the Charizard credential and network connection.
+
 ## Goal
 
 All fleet nodes should send OpenClaw diagnostics to a configured OTLP endpoint
@@ -75,6 +80,8 @@ export FLEET_INGEST_TOKEN="TOKEN"
   variables, config files without token material, and explicit `unset` after use.
   `--token` remains available for controlled automation, but it can appear in
   shell history and process listings.
+- Do not add new behavior keyed by `lan` or `off_lan`. The next breaking node release should accept
+  one endpoint and one node credential regardless of location.
 
 ## Validation
 

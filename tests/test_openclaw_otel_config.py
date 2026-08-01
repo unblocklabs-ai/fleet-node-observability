@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from fleet_node_observability.commands.configure_openclaw_otel import main as configure_main
+from fleet_node_observability.commands.configure_openclaw_local_otel import main as local_main
 from fleet_node_observability.commands.print_otlp_env import main as print_main
 
 
@@ -182,3 +183,39 @@ class OpenClawOtlpCommandTest(unittest.TestCase):
             self.assertEqual(rc, 1)
             self.assertEqual(out, "")
             self.assertIn("contains invalid JSON", err)
+
+    def test_local_command_removes_central_headers_and_uses_loopback(self) -> None:
+        from contextlib import redirect_stderr, redirect_stdout
+        from io import StringIO
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            node_home = Path(tmpdir) / "node-home"
+            openclaw_config = node_home / ".openclaw" / "openclaw.json"
+            openclaw_config.parent.mkdir(parents=True)
+            openclaw_config.write_text(
+                '{"diagnostics":{"otel":{"headers":{"Authorization":"Basic old-secret"}}}}',
+                encoding="utf-8",
+            )
+            node_config = Path(tmpdir) / "agent.json"
+            node_config.write_text(
+                json.dumps(
+                    {
+                        "node_label": "mini_03",
+                        "node_user": "fleet-mini-03",
+                        "node_home": str(node_home),
+                        "telemetry_mode": "dual",
+                        "telemetry_endpoint": "https://telemetry.example.com",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            out = StringIO()
+            err = StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = local_main(["--config", str(node_config), "--no-backup"])
+
+            self.assertEqual(rc, 0, err.getvalue())
+            otel = json.loads(openclaw_config.read_text(encoding="utf-8"))["diagnostics"]["otel"]
+            self.assertEqual(otel["endpoint"], "http://127.0.0.1:4318")
+            self.assertEqual(otel["headers"], {})
+            self.assertNotIn("secret", openclaw_config.read_text(encoding="utf-8"))

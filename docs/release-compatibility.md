@@ -6,6 +6,10 @@ This repo uses semver by default (`VERSION` file).
   installers, docs, examples, tests, and local-first release packaging.
 - Public metric and file-path contracts are treated as stable.
 
+`0.1.x` is the compatibility line for the current topology-specific deployment. `0.2.0` is the
+unreleased push-capable implementation and must be adopted with the central dual-run plan rather
+than presented as a transparent patch.
+
 ## Compatibility policy
 
 - Patch (`0.1.1`): compatible unless release notes say otherwise.
@@ -22,6 +26,11 @@ The table captures the expected minimum central stack behavior.
 | 0.1.x | OpenClaw diagnostics update path in `~/.openclaw/openclaw.json` | Existing keys are preserved before merge |
 | 0.1.x | Ingest tokens available per node | Used for Basic auth header generation |
 | 0.1.x | off-LAN environments support CF-Access headers | Required by proxy and OTLP headers in off-LAN mode |
+| 0.2.0 | Central schema v2/runtime inventory v4, canonical HTTPS OTLP/HTTP ingress, mode-aware metric normalization, and heartbeat alert | One installer and credential; `pull`/`dual`/`push` rollout |
+
+`0.2.0` pins OpenTelemetry Collector Contrib `0.157.0`. It is not published or production-approved
+by this worktree. The central and node repositories must be released and staged together after the
+pre-cutover gate passes.
 
 ## Breaking-change checklist
 
@@ -34,6 +43,7 @@ Before shipping a major or behavior-changing release:
   - collector timestamps
   - OTLP config keys
   - proxy token check
+  - local scrape-to-OTLP and heartbeat checks for the push-capable release
 
 ## Release artifacts
 

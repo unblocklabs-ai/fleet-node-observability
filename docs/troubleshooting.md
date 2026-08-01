@@ -1,5 +1,28 @@
 # Troubleshooting
 
+The LAN/off-LAN, proxy, and Cloudflare Access checks below apply to the `0.1.x` compatibility paths.
+
+## Unified agent checks (0.2.0)
+
+```bash
+launchctl print system/com.unblocklabs.fleet-node-agent
+curl -fsS http://127.0.0.1:13133/
+curl -fsS http://127.0.0.1:8888/metrics | grep -E 'otelcol_exporter_queue_(size|capacity)'
+curl -fsS http://127.0.0.1:9100/metrics | grep fleet_node_agent_heartbeat_timestamp_seconds
+```
+
+The Collector config and full Authorization header live below
+`~/.openclaw/fleet-node-observability/`; the header file and its directory must remain `0600` and
+`0700`. Do not print its contents. Collector errors are in that runtime's `logs/` directory.
+
+If a queue fills during an outage, inspect queue size/capacity, send-failure, and rejected-item
+metrics. One consumer per exporter deliberately limits replay concurrency after recovery. The
+heartbeat has a separate queue and five-minute retry age; a stale occurrence timestamp must alert
+even if an old queued heartbeat is delivered later.
+Use `fleet_node_agent_queue_oldest_age_seconds` to distinguish a continuously non-empty queue from
+a brief spike, and treat `fleet_node_agent_queue_metrics_available == 0` as loss of the local
+measurement rather than an empty queue.
+
 ## Installation and launchctl issues
 
 ### Command exits with permission denied

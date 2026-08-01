@@ -1,5 +1,29 @@
 # Repository Structure Plan
 
+Status: historical extraction and `0.1.x` layout record. The repository boundary remains valid, but
+separate LAN/off-LAN commands shown below are compatibility surfaces scheduled to converge on one
+installer and one outbound OTLP runtime. See `docs/central-integration-plan.md` for the current
+product direction.
+
+The current `0.2.0` additions are:
+
+```text
+bin/
+  install-fleet-node-agent
+  configure-openclaw-local-otel
+  render-fleet-node-agent-config
+  write-fleet-node-agent-secret
+src/fleet_node_observability/
+  agent.py
+  commands/{configure_openclaw_local_otel,render_agent_config,write_agent_secret}.py
+  installers/fleet_node_agent.sh
+  collectors/fleet_node_agent_heartbeat.sh
+examples/node-agent.example.json
+```
+
+The older structure and topology-specific examples below are retained as extraction history, not as
+the preferred interface.
+
 This document describes the target folder and file structure for
 `fleet-node-observability`.
 
@@ -15,8 +39,8 @@ separate from the central `fleet-observability` control plane.
   Grafana code do not appear in this repo.
 - The node package can be installed from a GitHub release tarball without
   requiring the central repo checkout.
-- The target node should only need macOS built-ins, Homebrew `node_exporter`,
-  Python 3, and the files in the release artifact.
+- The target node needs macOS built-ins, Homebrew `node_exporter`, Python 3, the
+  release artifact, and the installer-verified pinned Collector binary.
 
 ## Recommended Top-Level Layout
 

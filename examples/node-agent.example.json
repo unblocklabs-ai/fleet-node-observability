@@ -1,0 +1,10 @@
+{
+  "node_label": "mini_03",
+  "node_user": "fleet-mini-03",
+  "node_home": "/Users/fleet-mini-03",
+  "telemetry_mode": "dual",
+  "telemetry_endpoint": "https://telemetry.example.com",
+  "openclaw_config_path": "~/.openclaw/openclaw.json",
+  "node_exporter_target": "127.0.0.1:9100",
+  "node_exporter_textfile_dir": "/opt/homebrew/var/lib/node_exporter/textfile_collector"
+}

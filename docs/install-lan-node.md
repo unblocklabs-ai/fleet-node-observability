@@ -2,6 +2,10 @@
 
 Use these steps to install the LAN (same-subnet) node tooling on a Mac mini.
 
+Status: current `0.1.x` compatibility runbook. The selected product direction replaces this and the
+off-LAN installer with one push-only installer. Do not extend this runbook with new LAN-specific
+behavior.
+
 ## What it configures
 
 - Installs `node_exporter` (Homebrew) when missing.

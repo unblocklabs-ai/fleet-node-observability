@@ -1,7 +1,33 @@
 # Node Textfile Metrics
 
-Collectors write Prometheus textfiles that Fleet Alloy scraping jobs consume.
+Collectors write Prometheus textfiles that the current node_exporter/Prometheus scrape path consumes.
 Avoid changing names/labels unless coordinated through release compatibility.
+
+In `0.1.x`, central Prometheus obtains these metrics by scraping node_exporter. In `0.2.0`, the
+node-local Collector scrapes the same loopback node_exporter/textfile surface and exports the
+resulting metrics to Charizard over OTLP/HTTP. The textfile format and metric meaning remain stable;
+only transport and trusted identity assignment move.
+
+## Node-agent heartbeat
+
+- `fleet_node_agent_heartbeat_timestamp_seconds`
+  - gauge value: Unix occurrence time when the node created the heartbeat
+  - bounded label: `node` (treated as a client claim; Charizard auth remains authoritative)
+
+The heartbeat is generated every 30 seconds, scraped through a dedicated receiver, and exported
+through its own 8 MiB persistent queue with a five-minute retry age. Central freshness compares the
+metric value to current time; delayed replay of an old sample therefore cannot masquerade as a
+current heartbeat.
+
+The same producer reads the Collector's loopback self-metrics and emits:
+
+- `fleet_node_agent_queue_metrics_available{node}`
+- `fleet_node_agent_queue_oldest_age_seconds{node,signal}`
+
+The `signal` label is restricted to six configured pipelines. Age starts when a queue is first
+continuously observed non-empty, survives a Collector restart in a protected local state file, and
+resets only after that queue is observed empty. This is an operational backlog-age estimate, not an
+exact age for every record.
 
 ## OpenClaw gateway
 
@@ -10,8 +36,8 @@ Avoid changing names/labels unless coordinated through release compatibility.
     - `node`
     - `gateway_ready_url`
 
-This repo does not emit `openclaw_gateway_last_ready_check_timestamp_seconds`.
-Central dashboards should use the scrape timestamp for freshness checks.
+This repo does not emit `openclaw_gateway_last_ready_check_timestamp_seconds`. Agent liveness is
+covered by the occurrence-timestamp heartbeat; gateway readiness retains its existing metric.
 
 ## Codex usage
 
@@ -74,10 +100,10 @@ Codex labels:
 
 ## Expected labels
 
-Collectors intentionally emit no `hostname` label or trusted node-identity
-assertion. Some published metrics retain the operator-supplied `node` label for
-compatibility, but central Alloy and Prometheus configuration derives trusted
-node identity during scrape and relabeling.
+Collectors intentionally emit no `hostname` label or trusted node-identity assertion. Some
+published metrics retain the operator-supplied `node` label for compatibility. Current central
+Prometheus derives trusted labels during scrape/relabeling; the push path must instead derive them
+from the credential authenticated by central Alloy.
 
 `account_email` is a deliberate, owner-approved Codex usage label retained for
 operator triage. Keep it stable unless the central contract is explicitly
@@ -86,11 +112,14 @@ changed.
 Use lowercase label names and avoid adding new high-cardinality account
 identifiers beyond `account_email`.
 
-## Scrape path contract
+## Current scrape path contract
 
 - `fleet-node-exporter-proxy` exposes only `/metrics`.
 - Proxy enforces `X-Fleet-Scrape-Token` for every request.
 - Node-exporter itself may expose normal metrics on port `9100` as needed.
+
+These proxy and token requirements are transitional. In `push`, the unified installer binds
+node_exporter to loopback and does not expose it to Charizard or Cloudflare.
 
 ## File locations
 

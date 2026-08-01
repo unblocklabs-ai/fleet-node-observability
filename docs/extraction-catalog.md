@@ -1,5 +1,10 @@
 # Extraction Catalog From `fleet-observability`
 
+Status: historical extraction record for the `0.1.x` implementation. References to separate LAN
+and off-LAN installers, per-node tunnels, scrape proxies, and Cloudflare Access headers document
+what was extracted, not the durable architecture. See `docs/central-integration-plan.md` for the
+push-only successor plan.
+
 Source reviewed:
 
 - `<source fleet-observability checkout>`
