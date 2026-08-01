@@ -45,9 +45,30 @@ class AgentConfigTest(unittest.TestCase):
         self.assertNotIn("cloudflare", source.lower())
 
     def test_requires_https_base_endpoint(self) -> None:
-        for endpoint in ["http://telemetry.example.com", "https://telemetry.example.com/v1/metrics"]:
+        invalid_endpoints = [
+            "http://telemetry.example.com",
+            "https://telemetry.example.com/v1/metrics",
+            "https://user@telemetry.example.com",
+            "https://user:password@telemetry.example.com",
+            "https://telemetry.example.com:not-a-port",
+            "https://telemetry.example.com:0",
+            "https://telemetry.example.com:65536",
+            "https://telemetry.example.com:",
+            " https://telemetry.example.com",
+        ]
+        for endpoint in invalid_endpoints:
             with self.subTest(endpoint=endpoint), self.assertRaises(ConfigError):
                 self.load(telemetry_endpoint=endpoint)
+        for endpoint in [
+            "https://telemetry.example.com",
+            "https://telemetry.example.com:443",
+            "https://telemetry.example.com:8443/",
+        ]:
+            with self.subTest(endpoint=endpoint):
+                self.assertEqual(
+                    self.load(telemetry_endpoint=endpoint).telemetry_endpoint,
+                    endpoint.rstrip("/"),
+                )
 
     def test_all_local_listeners_and_scrapes_must_be_loopback(self) -> None:
         for field in [
@@ -62,6 +83,39 @@ class AgentConfigTest(unittest.TestCase):
     def test_runtime_paths_cannot_escape_managed_node_directory(self) -> None:
         with self.assertRaises(ConfigError):
             self.load(queue_directory="/tmp/fleet-queue")
+
+    def test_managed_file_and_state_paths_must_not_overlap(self) -> None:
+        base = Path("/Users/fleet-mini-03/.openclaw/fleet-node-observability")
+        cases = [
+            {
+                "collector_config_path": str(base / "same"),
+                "authorization_header_path": str(base / "same"),
+            },
+            {
+                "collector_config_path": str(base / "same"),
+                "collector_binary_path": str(base / "same"),
+            },
+            {
+                "authorization_header_path": str(base / "same"),
+                "collector_binary_path": str(base / "same"),
+            },
+            {"collector_config_path": str(base / "bin")},
+            {"queue_directory": str(base / "state")},
+            {"queue_directory": str(base / "state" / "queue")},
+            {
+                "queue_directory": str(base / "queue-file"),
+                "collector_config_path": str(base / "queue-file"),
+            },
+            {"queue_directory": str(base)},
+            {
+                "collector_config_path": str(base / "config-root"),
+                "queue_directory": str(base / "config-root" / "queue"),
+            },
+            {"collector_config_path": str(base / "state" / "collector.json")},
+        ]
+        for overrides in cases:
+            with self.subTest(overrides=overrides), self.assertRaises(ConfigError):
+                self.load(**overrides)
 
     def test_textfile_directory_is_limited_to_homebrew_or_node_home(self) -> None:
         with self.assertRaises(ConfigError):

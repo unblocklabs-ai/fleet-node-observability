@@ -106,8 +106,16 @@ def _validate_host_port(value: str, *, key: str, require_loopback: bool) -> str:
 
 def _validate_endpoint(value: str) -> str:
     parsed = urlparse(value)
-    if parsed.scheme != "https" or not parsed.netloc:
+    if parsed.scheme != "https" or not parsed.netloc or parsed.hostname is None:
         raise ConfigError("telemetry_endpoint must be an absolute HTTPS URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ConfigError("telemetry_endpoint must not include userinfo")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ConfigError("telemetry_endpoint port must be numeric and between 1 and 65535") from exc
+    if parsed.netloc.endswith(":") or (port is not None and not 1 <= port <= 65535):
+        raise ConfigError("telemetry_endpoint port must be numeric and between 1 and 65535")
     if parsed.query or parsed.fragment:
         raise ConfigError("telemetry_endpoint must not include a query or fragment")
     if parsed.path not in {"", "/"}:
@@ -126,6 +134,12 @@ def load_agent_config(path: Path | str) -> AgentConfig:
     mode = _string(payload, "telemetry_mode", "push").lower()
     if mode not in TELEMETRY_MODES:
         raise ConfigError("telemetry_mode must be one of: pull, dual, push")
+    raw_telemetry_endpoint = payload.get("telemetry_endpoint")
+    if (
+        isinstance(raw_telemetry_endpoint, str)
+        and raw_telemetry_endpoint.strip() != raw_telemetry_endpoint
+    ):
+        raise ConfigError("telemetry_endpoint must not include surrounding whitespace")
 
     base_dir = node_home / ".openclaw" / "fleet-node-observability"
     config = AgentConfig(
@@ -198,6 +212,7 @@ def load_agent_config(path: Path | str) -> AgentConfig:
             managed_path.relative_to(base_dir)
         except ValueError as exc:
             raise ConfigError(f"{key} must be inside {base_dir}") from exc
+    _validate_managed_path_relationships(config, state_directory=base_dir / "state")
     allowed_textfile_dirs = {
         Path("/opt/homebrew/var/lib/node_exporter/textfile_collector"),
         Path("/usr/local/var/lib/node_exporter/textfile_collector"),
@@ -210,6 +225,46 @@ def load_agent_config(path: Path | str) -> AgentConfig:
                 "node_exporter_textfile_dir must use a supported Homebrew path or live under node_home"
             ) from exc
     return config
+
+
+def _validate_managed_path_relationships(
+    config: AgentConfig, *, state_directory: Path
+) -> None:
+    file_targets = {
+        "collector_config_path": config.collector_config_path,
+        "authorization_header_path": config.authorization_header_path,
+        "collector_binary_path": config.collector_binary_path,
+    }
+    directory_targets = {
+        "queue_directory": config.queue_directory,
+        "state_directory": state_directory,
+    }
+
+    file_items = list(file_targets.items())
+    for index, (left_name, left_path) in enumerate(file_items):
+        for right_name, right_path in file_items[index + 1 :]:
+            if (
+                left_path == right_path
+                or left_path in right_path.parents
+                or right_path in left_path.parents
+            ):
+                raise ConfigError(f"{left_name} and {right_name} must not overlap")
+
+    if (
+        config.queue_directory == state_directory
+        or config.queue_directory in state_directory.parents
+        or state_directory in config.queue_directory.parents
+    ):
+        raise ConfigError("queue_directory and state_directory must not overlap")
+
+    for directory_name, directory_path in directory_targets.items():
+        for file_name, file_path in file_targets.items():
+            if (
+                directory_path == file_path
+                or directory_path in file_path.parents
+                or file_path in directory_path.parents
+            ):
+                raise ConfigError(f"{directory_name} and {file_name} must not overlap")
 
 
 def _resource_processor(config: AgentConfig, source: str) -> dict[str, Any]:

@@ -61,13 +61,20 @@ path-swap race still needs final validation in a disposable macOS VM before prod
 
 `telemetry_mode` is rollout state, not network location:
 
-- `pull`: OpenClaw uses the local agent; legacy host-metric pull remains canonical.
-- `dual`: host metrics are also pushed under a canary job while legacy pull remains canonical.
-- `push`: pushed host metrics use the canonical job and node_exporter is rebound to loopback.
+- `pull`: OpenClaw uses the local agent; the preserved legacy host-metric service is restored and
+  the push heartbeat LaunchDaemon is removed.
+- `dual`: the preserved legacy host-metric service remains canonical, while host metrics and the
+  node heartbeat are also pushed under canary jobs.
+- `push`: pushed host metrics use the canonical job and node_exporter is rebound to loopback. The
+  exact prior system LaunchDaemon or user LaunchAgent is retained as a rollback artifact.
 
 Move only one step at a time. After central parity and rollback evidence is accepted, a push node
 may retire its legacy scrape proxy explicitly with `--retire-legacy-pull`. Per-node Cloudflare
-tunnel deletion remains a central operator cutover action.
+tunnel deletion remains a central operator cutover action. Pull and dual fail closed if no legacy
+artifact can be restored; a preserved loopback service also requires its scrape proxy. Explicit
+retirement records a durable marker and disables automatic rollback until an operator manually
+restores the retired artifacts. Reinstalling the same mode is idempotent and does not replace the
+saved rollback copy.
 
 ### Backpressure contract
 

@@ -274,6 +274,15 @@ COLLECTOR_LABEL="com.unblocklabs.fleet-node-agent"
 COLLECTOR_PLIST="/Library/LaunchDaemons/$COLLECTOR_LABEL.plist"
 HEARTBEAT_LABEL="com.unblocklabs.fleet-node-agent-heartbeat"
 HEARTBEAT_PLIST="/Library/LaunchDaemons/$HEARTBEAT_LABEL.plist"
+NODE_EXPORTER_LABEL="com.unblocklabs.node-exporter"
+SYSTEM_NODE_EXPORTER_PLIST="/Library/LaunchDaemons/$NODE_EXPORTER_LABEL.plist"
+SYSTEM_NODE_EXPORTER_BACKUP="$SYSTEM_NODE_EXPORTER_PLIST.fleet-agent-rollback"
+USER_NODE_EXPORTER_PLIST="$NODE_HOME/Library/LaunchAgents/$NODE_EXPORTER_LABEL.plist"
+USER_NODE_EXPORTER_BACKUP="/Library/LaunchDaemons/.com.unblocklabs.node-exporter.user-launchagent.fleet-agent-rollback"
+ROLLBACK_OWNER_UID=0
+LEGACY_PROXY_PLIST="/Library/LaunchDaemons/com.unblocklabs.node-exporter-proxy.plist"
+LEGACY_PROXY_RETIRED="$LEGACY_PROXY_PLIST.retired-by-fleet-agent"
+LEGACY_RETIRE_MARKER="/Library/LaunchDaemons/.com.unblocklabs.fleet-node-agent.legacy-pull-retired"
 
 find_node_exporter() {
   for candidate in /opt/homebrew/bin/node_exporter /usr/local/bin/node_exporter; do
@@ -306,18 +315,14 @@ ensure_node_exporter_installed() {
 install_loopback_node_exporter() {
   ensure_node_exporter_installed
   local node_exporter_bin
-  local node_exporter_label="com.unblocklabs.node-exporter"
-  local node_exporter_plist="/Library/LaunchDaemons/$node_exporter_label.plist"
-  local user_id
-  local legacy_user_plist="$NODE_HOME/Library/LaunchAgents/$node_exporter_label.plist"
   node_exporter_bin="$(find_node_exporter)"
-  user_id="$NODE_UID"
 
   cat >"$TMP_DIR/node-exporter.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>$node_exporter_label</string>
+  <key>Label</key><string>$NODE_EXPORTER_LABEL</string>
+  <!-- fleet-node-agent-managed -->
   <key>UserName</key><string>$(escape_xml "$NODE_USER")</string>
   <key>ProgramArguments</key><array>
     <string>$(escape_xml "$node_exporter_bin")</string>
@@ -331,21 +336,249 @@ install_loopback_node_exporter() {
   <key>StandardErrorPath</key><string>$(escape_xml "$RUNTIME_LOGS/node-exporter.err.log")</string>
 </dict></plist>
 PLIST
+}
 
-  launchctl bootout "gui/$user_id" "$legacy_user_plist" >/dev/null 2>&1 || true
-  launchctl bootout system "$node_exporter_plist" >/dev/null 2>&1 || true
-  install -o root -g wheel -m 0644 "$TMP_DIR/node-exporter.plist" "$node_exporter_plist"
-  launchctl bootstrap system "$node_exporter_plist"
-  launchctl kickstart -k "system/$node_exporter_label"
-  if [[ -f "$legacy_user_plist" ]]; then
-    run_as_node mv "$legacy_user_plist" \
-      "$legacy_user_plist.disabled-fleet-push-$(date -u +%Y%m%dT%H%M%SZ)"
+# BEGIN MODE RECONCILIATION
+is_fleet_managed_node_exporter() {
+  local plist="$1"
+  [[ -f "$plist" ]] && grep -q 'fleet-node-agent-managed' "$plist"
+}
+
+validate_rollback_backup() {
+  local path="$1"
+  local metadata owner mode links
+  if [[ -L "$path" || ! -f "$path" ]]; then
+    echo "legacy rollback backup must be a regular non-symlink file: $path" >&2
+    return 1
+  fi
+  metadata="$(stat -f '%u %Lp %l' "$path")"
+  owner="${metadata%% *}"
+  metadata="${metadata#* }"
+  mode="${metadata%% *}"
+  links="${metadata##* }"
+  if [[ "$owner" != "$ROLLBACK_OWNER_UID" || "$links" != "1" ]] || \
+    (( (8#$mode & 8#22) != 0 )); then
+    echo "legacy rollback backup has unsafe ownership, mode, or link count: $path" >&2
+    return 1
   fi
 }
+
+preserve_rollback_backup_once() {
+  local source="$1"
+  local backup="$2"
+  if [[ -L "$backup" || -e "$backup" ]]; then
+    validate_rollback_backup "$backup"
+    return
+  fi
+  install -m 0400 "$source" "$backup"
+  validate_rollback_backup "$backup"
+}
+
+stage_user_plist() {
+  local source="$1"
+  local staged="$2"
+  install -m 0600 /dev/null "$staged"
+  if ! run_as_node "$PYTHON_BIN" - "$source" >"$staged" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | os.O_NOFOLLOW
+try:
+    descriptor = os.open(path, flags)
+except OSError as exc:
+    print(f"unable to open legacy user plist without following links: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        print("legacy user plist must be a single-linked regular file", file=sys.stderr)
+        raise SystemExit(1)
+    chunks = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > 1024 * 1024:
+            print("legacy user plist exceeds the 1 MiB safety limit", file=sys.stderr)
+            raise SystemExit(1)
+        chunks.append(chunk)
+    after = os.fstat(descriptor)
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+        print("legacy user plist changed while it was being read", file=sys.stderr)
+        raise SystemExit(1)
+finally:
+    os.close(descriptor)
+sys.stdout.buffer.write(b"".join(chunks))
+PY
+  then
+    rm -f "$staged"
+    return 1
+  fi
+}
+
+preserve_legacy_node_exporter() {
+  if [[ -f "$SYSTEM_NODE_EXPORTER_PLIST" ]] && \
+    ! is_fleet_managed_node_exporter "$SYSTEM_NODE_EXPORTER_PLIST"; then
+    preserve_rollback_backup_once "$SYSTEM_NODE_EXPORTER_PLIST" \
+      "$SYSTEM_NODE_EXPORTER_BACKUP"
+    launchctl bootout system "$SYSTEM_NODE_EXPORTER_PLIST" >/dev/null 2>&1 || true
+  fi
+  if [[ -L "$USER_NODE_EXPORTER_PLIST" || -e "$USER_NODE_EXPORTER_PLIST" ]]; then
+    stage_user_plist "$USER_NODE_EXPORTER_PLIST" "$TMP_DIR/user-node-exporter-source.plist"
+    preserve_rollback_backup_once "$TMP_DIR/user-node-exporter-source.plist" \
+      "$USER_NODE_EXPORTER_BACKUP"
+    run_as_node launchctl bootout "gui/$NODE_UID" "$USER_NODE_EXPORTER_PLIST" \
+      >/dev/null 2>&1 || true
+    run_as_node rm -f "$USER_NODE_EXPORTER_PLIST"
+  fi
+}
+
+activate_push_node_exporter() {
+  preserve_legacy_node_exporter
+  launchctl bootout system "$SYSTEM_NODE_EXPORTER_PLIST" >/dev/null 2>&1 || true
+  install -m 0644 "$TMP_DIR/node-exporter.plist" "$SYSTEM_NODE_EXPORTER_PLIST"
+  launchctl bootstrap system "$SYSTEM_NODE_EXPORTER_PLIST"
+  launchctl kickstart -k "system/$NODE_EXPORTER_LABEL"
+}
+
+activate_legacy_proxy_if_required() {
+  local node_exporter_plist="$1"
+  if ! grep -q -- '--web.listen-address=127.0.0.1' "$node_exporter_plist"; then
+    return
+  fi
+  if [[ ! -f "$LEGACY_PROXY_PLIST" ]]; then
+    echo "legacy loopback node_exporter requires its preserved scrape proxy" >&2
+    return 1
+  fi
+  launchctl bootout system "$LEGACY_PROXY_PLIST" >/dev/null 2>&1 || true
+  launchctl bootstrap system "$LEGACY_PROXY_PLIST"
+  launchctl kickstart -k system/com.unblocklabs.node-exporter-proxy
+}
+
+activate_legacy_node_exporter() {
+  local active_plist=""
+  local active_domain=""
+  local source_plist=""
+  local source_is_user=0
+  if [[ -f "$LEGACY_RETIRE_MARKER" ]]; then
+    echo "legacy pull was explicitly retired; restore its artifacts before selecting $TELEMETRY_MODE" >&2
+    return 1
+  fi
+  for backup in "$SYSTEM_NODE_EXPORTER_BACKUP" "$USER_NODE_EXPORTER_BACKUP"; do
+    if [[ -L "$backup" || -e "$backup" ]]; then
+      validate_rollback_backup "$backup"
+    fi
+  done
+
+  if [[ -f "$SYSTEM_NODE_EXPORTER_PLIST" ]] && \
+    ! is_fleet_managed_node_exporter "$SYSTEM_NODE_EXPORTER_PLIST"; then
+    source_plist="$SYSTEM_NODE_EXPORTER_PLIST"
+    active_domain="system"
+  elif [[ -f "$SYSTEM_NODE_EXPORTER_BACKUP" ]]; then
+    source_plist="$SYSTEM_NODE_EXPORTER_BACKUP"
+    active_domain="system"
+  elif [[ -L "$USER_NODE_EXPORTER_PLIST" || -e "$USER_NODE_EXPORTER_PLIST" ]]; then
+    stage_user_plist "$USER_NODE_EXPORTER_PLIST" "$TMP_DIR/user-node-exporter-active.plist"
+    source_plist="$TMP_DIR/user-node-exporter-active.plist"
+    source_is_user=1
+    active_domain="gui/$NODE_UID"
+  elif [[ -f "$USER_NODE_EXPORTER_BACKUP" ]]; then
+    source_plist="$USER_NODE_EXPORTER_BACKUP"
+    active_domain="gui/$NODE_UID"
+  fi
+
+  if [[ -z "$source_plist" ]]; then
+    echo "no preserved legacy node_exporter is available for telemetry_mode=$TELEMETRY_MODE" >&2
+    return 1
+  fi
+  if grep -q -- '--web.listen-address=127.0.0.1' "$source_plist" && \
+    [[ ! -f "$LEGACY_PROXY_PLIST" ]]; then
+    echo "legacy loopback node_exporter requires its preserved scrape proxy" >&2
+    return 1
+  fi
+
+  if [[ "$active_domain" == "system" ]]; then
+    active_plist="$SYSTEM_NODE_EXPORTER_PLIST"
+    if [[ "$source_plist" != "$active_plist" ]]; then
+      launchctl bootout system "$active_plist" >/dev/null 2>&1 || true
+      install -m 0644 "$source_plist" "$active_plist"
+    fi
+  else
+    if is_fleet_managed_node_exporter "$SYSTEM_NODE_EXPORTER_PLIST"; then
+      launchctl bootout system "$SYSTEM_NODE_EXPORTER_PLIST" >/dev/null 2>&1 || true
+      rm -f "$SYSTEM_NODE_EXPORTER_PLIST"
+    fi
+    active_plist="$USER_NODE_EXPORTER_PLIST"
+    if [[ "$source_is_user" -eq 0 && "$source_plist" != "$active_plist" ]]; then
+      install -m 0444 "$source_plist" "$TMP_DIR/user-node-exporter-rollback.plist"
+      run_as_node install -m 0644 "$TMP_DIR/user-node-exporter-rollback.plist" \
+        "$active_plist"
+    fi
+  fi
+
+  if [[ "$active_domain" == "system" ]]; then
+    launchctl bootout "$active_domain" "$active_plist" >/dev/null 2>&1 || true
+    launchctl bootstrap "$active_domain" "$active_plist"
+    launchctl kickstart -k "system/$NODE_EXPORTER_LABEL"
+  else
+    run_as_node launchctl bootout "$active_domain" "$active_plist" >/dev/null 2>&1 || true
+    run_as_node launchctl bootstrap "$active_domain" "$active_plist"
+    run_as_node launchctl kickstart -k "$active_domain/$NODE_EXPORTER_LABEL"
+  fi
+  activate_legacy_proxy_if_required "$source_plist"
+}
+
+reconcile_node_exporter_mode() {
+  case "$TELEMETRY_MODE" in
+    pull|dual) activate_legacy_node_exporter ;;
+    push) activate_push_node_exporter ;;
+  esac
+}
+
+reconcile_heartbeat_mode() {
+  if [[ "$TELEMETRY_MODE" == "pull" ]]; then
+    launchctl bootout system "$HEARTBEAT_PLIST" >/dev/null 2>&1 || true
+    rm -f "$HEARTBEAT_PLIST"
+    return
+  fi
+  install -m 0644 "$TMP_DIR/heartbeat.plist" "$HEARTBEAT_PLIST"
+}
+
+retire_plist() {
+  local domain="$1"
+  local plist="$2"
+  local retired="$3"
+  if [[ ! -f "$plist" ]]; then
+    return
+  fi
+  if [[ -e "$retired" ]]; then
+    echo "refusing to overwrite previously retired artifact: $retired" >&2
+    return 1
+  fi
+  launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
+  mv "$plist" "$retired"
+}
+
+retire_legacy_pull() {
+  if [[ -f "$LEGACY_RETIRE_MARKER" ]]; then
+    echo "[fleet-node-agent] legacy pull was already explicitly retired"
+    return
+  fi
+  retire_plist system "$LEGACY_PROXY_PLIST" "$LEGACY_PROXY_RETIRED"
+  printf 'retired_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$TMP_DIR/legacy-pull-retired"
+  install -m 0644 "$TMP_DIR/legacy-pull-retired" "$LEGACY_RETIRE_MARKER"
+}
+# END MODE RECONCILIATION
 
 if [[ "$TELEMETRY_MODE" == "push" ]]; then
   install_loopback_node_exporter
 fi
+reconcile_node_exporter_mode
 
 cat >"$TMP_DIR/collector.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -386,13 +619,13 @@ if [[ "$TELEMETRY_MODE" == "dual" || "$TELEMETRY_MODE" == "push" ]]; then
   <key>StandardErrorPath</key><string>$(escape_xml "$RUNTIME_LOGS/heartbeat.err.log")</string>
 </dict></plist>
 PLIST
-  install -o root -g wheel -m 0644 "$TMP_DIR/heartbeat.plist" "$HEARTBEAT_PLIST"
 fi
+reconcile_heartbeat_mode
 
 launchctl bootout system "$COLLECTOR_PLIST" >/dev/null 2>&1 || true
 launchctl bootstrap system "$COLLECTOR_PLIST"
 launchctl kickstart -k "system/$COLLECTOR_LABEL"
-if [[ -f "$HEARTBEAT_PLIST" ]]; then
+if [[ "$TELEMETRY_MODE" == "dual" || "$TELEMETRY_MODE" == "push" ]]; then
   launchctl bootout system "$HEARTBEAT_PLIST" >/dev/null 2>&1 || true
   launchctl bootstrap system "$HEARTBEAT_PLIST"
   launchctl kickstart -k "system/$HEARTBEAT_LABEL"
@@ -419,7 +652,7 @@ verify_node_exporter_metrics() {
   install -m 0600 /dev/null "$metrics_file"
   if ! curl --fail --silent --show-error --max-time 5 \
     --output "$metrics_file" "$metrics_url"; then
-    echo "node_exporter loopback scrape failed; keeping legacy transport unchanged" >&2
+    echo "node_exporter loopback scrape failed; legacy rollback artifacts were not retired" >&2
     return 1
   fi
   if ! grep -q '^node_cpu_seconds_total' "$metrics_file"; then
@@ -443,19 +676,10 @@ if [[ "$SKIP_OPENCLAW_CONFIG" -eq 0 ]]; then
     --config "$FROZEN_CONFIG"
 fi
 
-retire_plist() {
-  local domain="$1"
-  local plist="$2"
-  if [[ ! -f "$plist" ]]; then
-    return
-  fi
-  launchctl bootout "$domain" "$plist" >/dev/null 2>&1 || true
-  mv "$plist" "$plist.disabled-fleet-push-$(date -u +%Y%m%dT%H%M%SZ)"
-}
-
 if [[ "$RETIRE_LEGACY_PULL" -eq 1 ]]; then
-  retire_plist system "/Library/LaunchDaemons/com.unblocklabs.node-exporter-proxy.plist"
-  echo "[fleet-node-agent] legacy pull services retired; per-node Cloudflare tunnel cleanup remains an operator cutover step"
+  retire_legacy_pull
+  echo "[fleet-node-agent] legacy pull explicitly retired; automatic dual/pull rollback now requires manual artifact restoration"
+  echo "[fleet-node-agent] per-node Cloudflare tunnel cleanup remains an operator cutover step"
 fi
 
 echo "[fleet-node-agent] installed node=$NODE_LABEL mode=$TELEMETRY_MODE"

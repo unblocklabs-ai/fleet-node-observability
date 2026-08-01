@@ -172,7 +172,29 @@ class AgentInstallerContractTest(unittest.TestCase):
             'PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" -m fleet_node_observability.commands.write_agent_secret',
         ]:
             self.assertNotIn(prohibited, runtime_install)
-        self.assertIn('run_as_node mv "$legacy_user_plist"', self.installer)
+        self.assertIn(
+            'stage_user_plist "$USER_NODE_EXPORTER_PLIST" '
+            '"$TMP_DIR/user-node-exporter-source.plist"',
+            self.installer,
+        )
+        self.assertIn(
+            'preserve_rollback_backup_once "$TMP_DIR/user-node-exporter-source.plist" '
+            '\\\n      "$USER_NODE_EXPORTER_BACKUP"',
+            self.installer,
+        )
+        for required in ["os.O_NOFOLLOW", "os.fstat", "stat.S_ISREG"]:
+            self.assertIn(required, self.installer)
+        self.assertNotIn(
+            'install -m 0400 "$USER_NODE_EXPORTER_PLIST"', self.installer
+        )
+        self.assertNotIn(
+            'run_as_node install -m 0644 "$source_plist" "$active_plist"',
+            self.installer,
+        )
+        self.assertIn(
+            'USER_NODE_EXPORTER_BACKUP="/Library/LaunchDaemons/', self.installer
+        )
+        self.assertIn('run_as_node rm -f "$USER_NODE_EXPORTER_PLIST"', self.installer)
         self.assertIn('run_as_node tail -n 40 "$RUNTIME_LOGS/collector.err.log"', self.installer)
 
     def test_agent_is_single_network_owner(self) -> None:
@@ -184,7 +206,7 @@ class AgentInstallerContractTest(unittest.TestCase):
     def test_cutover_retirement_is_explicit_and_push_only(self) -> None:
         self.assertIn("--retire-legacy-pull", self.installer)
         self.assertIn('"$TELEMETRY_MODE" != "push"', self.installer)
-        self.assertIn("keeping legacy transport unchanged", self.installer)
+        self.assertIn("legacy rollback artifacts were not retired", self.installer)
         self.assertIn("per-node Cloudflare tunnel cleanup remains an operator cutover step", self.installer)
 
     def test_push_mode_rebinds_node_exporter_to_loopback_before_retiring_proxy(self) -> None:
