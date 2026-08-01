@@ -37,7 +37,8 @@ agent scrapes local node_exporter and Collector self-metrics, then batches, gzip
 and exports each signal through the same authenticated HTTPS base endpoint.
 
 Central state renders a secret-free config like `examples/node-agent.example.json`. Put the raw
-node credential in a separate mode-`0600` file, then install:
+node credential in a separate mode-`0600` file owned by and readable by the configured
+`node_user`, then install:
 
 ```bash
 chmod 0600 /absolute/path/to/ingest-token
@@ -50,6 +51,13 @@ The installer validates the pinned Collector config, starts the LaunchDaemons, p
 node_exporter, and heartbeat, and then rewrites OpenClaw to loopback OTLP with a timestamped backup.
 It never accepts a token in argv or the environment. Review the backup and restart OpenClaw after
 installation.
+
+The installer freezes one validated, normalized copy of the node config before making changes.
+Root writes only protected staging files and system LaunchDaemon plists; runtime binaries, config,
+credentials, queue/state directories, logs, and textfile paths are installed as `node_user`. This
+keeps a node-user path replacement from turning an installer race into a privileged filesystem
+write. The contract tests exercise the privilege boundary and symlink rejection, but a real
+path-swap race still needs final validation in a disposable macOS VM before production rollout.
 
 `telemetry_mode` is rollout state, not network location:
 

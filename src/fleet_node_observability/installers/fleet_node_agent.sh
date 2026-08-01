@@ -79,54 +79,6 @@ for command_name in curl shasum tar launchctl sudo; do
   fi
 done
 
-agent_value() {
-  local field="$1"
-  PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - "$CONFIG_PATH" "$field" <<'PY'
-import sys
-from fleet_node_observability.agent import load_agent_config
-
-value = getattr(load_agent_config(sys.argv[1]), sys.argv[2])
-print(value)
-PY
-}
-
-release_value() {
-  local platform="$1"
-  local field="$2"
-  PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - "$platform" "$field" <<'PY'
-import sys
-from fleet_node_observability.agent import COLLECTOR_RELEASES
-
-print(COLLECTOR_RELEASES[sys.argv[1]][sys.argv[2]])
-PY
-}
-
-NODE_LABEL="$(agent_value node_label)"
-NODE_USER="$(agent_value node_user)"
-NODE_HOME="$(agent_value node_home)"
-TELEMETRY_MODE="$(agent_value telemetry_mode)"
-COLLECTOR_CONFIG="$(agent_value collector_config_path)"
-AUTH_HEADER_FILE="$(agent_value authorization_header_path)"
-QUEUE_DIR="$(agent_value queue_directory)"
-COLLECTOR_BIN="$(agent_value collector_binary_path)"
-TEXTFILE_DIR="$(agent_value node_exporter_textfile_dir)"
-HEALTH_ENDPOINT="$(agent_value health_endpoint)"
-COLLECTOR_METRICS_ENDPOINT="$(agent_value collector_metrics_endpoint)"
-
-if ! id "$NODE_USER" >/dev/null 2>&1; then
-  echo "Configured node_user does not exist: $NODE_USER" >&2
-  exit 1
-fi
-SYSTEM_HOME="$(dscl . -read "/Users/$NODE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
-if [[ -z "$SYSTEM_HOME" || "$(cd "$SYSTEM_HOME" && pwd -P)" != "$NODE_HOME" ]]; then
-  echo "node_home must match the system home for $NODE_USER: ${SYSTEM_HOME:-unresolved}" >&2
-  exit 1
-fi
-if [[ "$RETIRE_LEGACY_PULL" -eq 1 && "$TELEMETRY_MODE" != "push" ]]; then
-  echo "--retire-legacy-pull is allowed only when telemetry_mode is push" >&2
-  exit 1
-fi
-
 reject_symlink_components() {
   local name="$1"
   local path="$2"
@@ -151,6 +103,99 @@ if [[ -L "$CONFIG_PATH" || ! -f "$CONFIG_PATH" ]]; then
   exit 1
 fi
 
+TMP_DIR="$(mktemp -d /tmp/fleet-node-agent-install.XXXXXX)"
+chmod 0711 "$TMP_DIR"
+trap 'rm -rf "$TMP_DIR"' EXIT
+FROZEN_CONFIG="$TMP_DIR/node-config.json"
+PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - "$CONFIG_PATH" "$FROZEN_CONFIG" <<'PY'
+import json
+import os
+import sys
+from dataclasses import fields
+from fleet_node_observability.agent import load_agent_config
+
+config = load_agent_config(sys.argv[1])
+payload = {field.name: str(getattr(config, field.name)) for field in fields(config)}
+descriptor = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+chmod 0444 "$FROZEN_CONFIG"
+FROZEN_CONFIG_SHA256="$(shasum -a 256 "$FROZEN_CONFIG" | awk '{print $1}')"
+
+verify_frozen_config() {
+  local actual_sha256
+  actual_sha256="$(shasum -a 256 "$FROZEN_CONFIG" | awk '{print $1}')"
+  if [[ "$actual_sha256" != "$FROZEN_CONFIG_SHA256" ]]; then
+    echo "normalized node config changed during installation" >&2
+    exit 1
+  fi
+}
+
+frozen_value() {
+  local field="$1"
+  verify_frozen_config
+  "$PYTHON_BIN" - "$FROZEN_CONFIG" "$field" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)[sys.argv[2]])
+PY
+}
+
+release_value() {
+  local platform="$1"
+  local field="$2"
+  PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - "$platform" "$field" <<'PY'
+import sys
+from fleet_node_observability.agent import COLLECTOR_RELEASES
+
+print(COLLECTOR_RELEASES[sys.argv[1]][sys.argv[2]])
+PY
+}
+
+NODE_LABEL="$(frozen_value node_label)"
+NODE_USER="$(frozen_value node_user)"
+NODE_HOME="$(frozen_value node_home)"
+TELEMETRY_MODE="$(frozen_value telemetry_mode)"
+COLLECTOR_CONFIG="$(frozen_value collector_config_path)"
+AUTH_HEADER_FILE="$(frozen_value authorization_header_path)"
+QUEUE_DIR="$(frozen_value queue_directory)"
+COLLECTOR_BIN="$(frozen_value collector_binary_path)"
+TEXTFILE_DIR="$(frozen_value node_exporter_textfile_dir)"
+HEALTH_ENDPOINT="$(frozen_value health_endpoint)"
+COLLECTOR_METRICS_ENDPOINT="$(frozen_value collector_metrics_endpoint)"
+NODE_EXPORTER_TARGET="$(frozen_value node_exporter_target)"
+LOCAL_OTLP_ENDPOINT="$(frozen_value local_otlp_endpoint)"
+TELEMETRY_ENDPOINT="$(frozen_value telemetry_endpoint)"
+
+if ! id "$NODE_USER" >/dev/null 2>&1; then
+  echo "Configured node_user does not exist: $NODE_USER" >&2
+  exit 1
+fi
+NODE_UID="$(id -u "$NODE_USER")"
+if [[ "$NODE_UID" -eq 0 ]]; then
+  echo "node_user must be an unprivileged local account" >&2
+  exit 1
+fi
+SYSTEM_HOME="$(dscl . -read "/Users/$NODE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
+if [[ -z "$SYSTEM_HOME" || "$(cd "$SYSTEM_HOME" && pwd -P)" != "$NODE_HOME" ]]; then
+  echo "node_home must match the system home for $NODE_USER: ${SYSTEM_HOME:-unresolved}" >&2
+  exit 1
+fi
+if [[ "$RETIRE_LEGACY_PULL" -eq 1 && "$TELEMETRY_MODE" != "push" ]]; then
+  echo "--retire-legacy-pull is allowed only when telemetry_mode is push" >&2
+  exit 1
+fi
+
+run_as_node() {
+  sudo -u "$NODE_USER" "$@"
+}
+
 case "$(uname -m)" in
   arm64) PLATFORM="darwin_arm64" ;;
   x86_64) PLATFORM="darwin_amd64" ;;
@@ -159,8 +204,6 @@ esac
 COLLECTOR_URL="$(release_value "$PLATFORM" url)"
 COLLECTOR_SHA256="$(release_value "$PLATFORM" sha256)"
 
-TMP_DIR="$(mktemp -d /tmp/fleet-node-agent-install.XXXXXX)"
-trap 'rm -rf "$TMP_DIR"' EXIT
 ARCHIVE="$TMP_DIR/otelcol-contrib.tar.gz"
 if [[ -n "$COLLECTOR_ARCHIVE" ]]; then
   if [[ ! -f "$COLLECTOR_ARCHIVE" || -L "$COLLECTOR_ARCHIVE" ]]; then
@@ -185,6 +228,12 @@ if [[ -z "$EXTRACTED_BIN" ]]; then
   echo "Pinned Collector archive did not contain otelcol-contrib" >&2
   exit 1
 fi
+STAGED_COLLECTOR_BIN="$TMP_DIR/otelcol-contrib"
+STAGED_HEARTBEAT="$TMP_DIR/fleet-node-agent-heartbeat"
+install -m 0555 "$EXTRACTED_BIN" "$STAGED_COLLECTOR_BIN"
+install -m 0555 \
+  "$REPO_DIR/src/fleet_node_observability/collectors/fleet_node_agent_heartbeat.sh" \
+  "$STAGED_HEARTBEAT"
 
 RUNTIME_DIR="$NODE_HOME/.openclaw/fleet-node-observability"
 RUNTIME_BIN="$RUNTIME_DIR/bin"
@@ -195,26 +244,27 @@ for managed_path in \
   "$COLLECTOR_BIN" "$TEXTFILE_DIR" "$RUNTIME_STATE"; do
   reject_symlink_components "managed node path" "$managed_path"
 done
-mkdir -p "$RUNTIME_BIN" "$RUNTIME_LOGS" "$RUNTIME_STATE" "$(dirname "$COLLECTOR_CONFIG")" \
-  "$(dirname "$AUTH_HEADER_FILE")" "$QUEUE_DIR" "$TEXTFILE_DIR"
-install -m 0755 "$EXTRACTED_BIN" "$COLLECTOR_BIN"
-install -m 0755 \
-  "$REPO_DIR/src/fleet_node_observability/collectors/fleet_node_agent_heartbeat.sh" \
-  "$RUNTIME_BIN/fleet-node-agent-heartbeat"
-chown -R "$NODE_USER" "$RUNTIME_DIR"
-chown "$NODE_USER" "$TEXTFILE_DIR"
-chmod 0700 "$(dirname "$AUTH_HEADER_FILE")" "$QUEUE_DIR"
-chmod 0700 "$RUNTIME_STATE"
+run_as_node mkdir -p "$RUNTIME_BIN" "$RUNTIME_LOGS" "$RUNTIME_STATE" \
+  "$(dirname "$COLLECTOR_CONFIG")" "$(dirname "$AUTH_HEADER_FILE")" "$QUEUE_DIR" "$TEXTFILE_DIR"
+run_as_node chmod 0700 "$RUNTIME_DIR" "$RUNTIME_BIN" "$RUNTIME_LOGS" "$RUNTIME_STATE" \
+  "$(dirname "$COLLECTOR_CONFIG")" "$(dirname "$AUTH_HEADER_FILE")" "$QUEUE_DIR"
+if ! run_as_node test -w "$TEXTFILE_DIR"; then
+  echo "node_exporter textfile directory is not writable by $NODE_USER: $TEXTFILE_DIR" >&2
+  exit 1
+fi
+run_as_node install -m 0755 "$STAGED_COLLECTOR_BIN" "$COLLECTOR_BIN"
+run_as_node install -m 0755 "$STAGED_HEARTBEAT" "$RUNTIME_BIN/fleet-node-agent-heartbeat"
 
-PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" -m fleet_node_observability.commands.write_agent_secret \
-  --config "$CONFIG_PATH" --token-file "$TOKEN_FILE" >/dev/null
-chown "$NODE_USER" "$AUTH_HEADER_FILE"
-chmod 0600 "$AUTH_HEADER_FILE"
+verify_frozen_config
+run_as_node env PYTHONPATH="$REPO_DIR/src" \
+  "$PYTHON_BIN" -m fleet_node_observability.commands.write_agent_secret \
+  --config "$FROZEN_CONFIG" --token-file "$TOKEN_FILE" >/dev/null
 
-PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" -m fleet_node_observability.commands.render_agent_config \
-  --config "$CONFIG_PATH" --output "$COLLECTOR_CONFIG" --collector-binary "$COLLECTOR_BIN" >/dev/null
-chown "$NODE_USER" "$COLLECTOR_CONFIG"
-chmod 0600 "$COLLECTOR_CONFIG"
+verify_frozen_config
+run_as_node env PYTHONPATH="$REPO_DIR/src" \
+  "$PYTHON_BIN" -m fleet_node_observability.commands.render_agent_config \
+  --config "$FROZEN_CONFIG" --output "$COLLECTOR_CONFIG" \
+  --collector-binary "$COLLECTOR_BIN" >/dev/null
 
 escape_xml() {
   printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'
@@ -261,7 +311,7 @@ install_loopback_node_exporter() {
   local user_id
   local legacy_user_plist="$NODE_HOME/Library/LaunchAgents/$node_exporter_label.plist"
   node_exporter_bin="$(find_node_exporter)"
-  user_id="$(id -u "$NODE_USER")"
+  user_id="$NODE_UID"
 
   cat >"$TMP_DIR/node-exporter.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -288,7 +338,8 @@ PLIST
   launchctl bootstrap system "$node_exporter_plist"
   launchctl kickstart -k "system/$node_exporter_label"
   if [[ -f "$legacy_user_plist" ]]; then
-    mv "$legacy_user_plist" "$legacy_user_plist.disabled-fleet-push-$(date -u +%Y%m%dT%H%M%SZ)"
+    run_as_node mv "$legacy_user_plist" \
+      "$legacy_user_plist.disabled-fleet-push-$(date -u +%Y%m%dT%H%M%SZ)"
   fi
 }
 
@@ -358,27 +409,38 @@ for _ in {1..20}; do
 done
 if [[ "$READY" -ne 1 ]]; then
   echo "fleet-node-agent did not become healthy at $HEALTH_URL" >&2
-  tail -n 40 "$RUNTIME_LOGS/collector.err.log" >&2 || true
+  run_as_node tail -n 40 "$RUNTIME_LOGS/collector.err.log" >&2 || true
   exit 1
 fi
 
-if [[ "$TELEMETRY_MODE" == "dual" || "$TELEMETRY_MODE" == "push" ]]; then
-  if ! curl --fail --silent --max-time 5 "http://$(agent_value node_exporter_target)/metrics" | \
-    grep -q '^node_cpu_seconds_total'; then
+verify_node_exporter_metrics() {
+  local metrics_url="$1"
+  local metrics_file="$TMP_DIR/node-exporter.metrics"
+  install -m 0600 /dev/null "$metrics_file"
+  if ! curl --fail --silent --show-error --max-time 5 \
+    --output "$metrics_file" "$metrics_url"; then
     echo "node_exporter loopback scrape failed; keeping legacy transport unchanged" >&2
-    exit 1
+    return 1
   fi
-  if ! curl --fail --silent --max-time 5 "http://$(agent_value node_exporter_target)/metrics" | \
-    grep -q '^fleet_node_agent_heartbeat_timestamp_seconds'; then
+  if ! grep -q '^node_cpu_seconds_total' "$metrics_file"; then
+    echo "node_exporter loopback scrape did not include node_cpu_seconds_total" >&2
+    return 1
+  fi
+  if ! grep -q '^fleet_node_agent_heartbeat_timestamp_seconds' "$metrics_file"; then
     echo "fresh node agent heartbeat was not visible through node_exporter" >&2
-    exit 1
+    return 1
   fi
+}
+
+if [[ "$TELEMETRY_MODE" == "dual" || "$TELEMETRY_MODE" == "push" ]]; then
+  verify_node_exporter_metrics "http://$NODE_EXPORTER_TARGET/metrics"
 fi
 
 if [[ "$SKIP_OPENCLAW_CONFIG" -eq 0 ]]; then
-  sudo -u "$NODE_USER" env PYTHONPATH="$REPO_DIR/src" \
+  verify_frozen_config
+  run_as_node env PYTHONPATH="$REPO_DIR/src" \
     "$PYTHON_BIN" -m fleet_node_observability.commands.configure_openclaw_local_otel \
-    --config "$CONFIG_PATH"
+    --config "$FROZEN_CONFIG"
 fi
 
 retire_plist() {
@@ -397,7 +459,7 @@ if [[ "$RETIRE_LEGACY_PULL" -eq 1 ]]; then
 fi
 
 echo "[fleet-node-agent] installed node=$NODE_LABEL mode=$TELEMETRY_MODE"
-echo "[fleet-node-agent] OpenClaw OTLP: http://$(agent_value local_otlp_endpoint)"
-echo "[fleet-node-agent] central OTLP: $(agent_value telemetry_endpoint)"
+echo "[fleet-node-agent] OpenClaw OTLP: http://$LOCAL_OTLP_ENDPOINT"
+echo "[fleet-node-agent] central OTLP: $TELEMETRY_ENDPOINT"
 echo "[fleet-node-agent] health: $HEALTH_URL"
 echo "[fleet-node-agent] restart OpenClaw after reviewing its timestamped config backup"
