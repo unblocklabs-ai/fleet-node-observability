@@ -7,7 +7,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
+from fleet_node_observability.agent import LocalNodeContext
 from fleet_node_observability.commands.render_agent_config import main
 
 
@@ -21,18 +23,21 @@ class RenderAgentConfigTest(unittest.TestCase):
             config.write_text(
                 json.dumps(
                     {
+                        "config_schema_version": 3,
                         "node_label": "mini_03",
-                        "node_user": "fleet-mini-03",
-                        "node_home": str(node_home),
-                        "telemetry_mode": "pull",
                         "telemetry_endpoint": "https://telemetry.example.com",
+                        "codex_usage_enabled": False,
                     }
                 ),
                 encoding="utf-8",
             )
             out = StringIO()
             err = StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
+            local = LocalNodeContext("fleet-mini-03", node_home, "arm64", Path("/opt/homebrew"))
+            with patch(
+                "fleet_node_observability.agent.resolve_current_node_context",
+                return_value=local,
+            ), redirect_stdout(out), redirect_stderr(err):
                 rc = main(["--config", str(config), "--output", str(output)])
             self.assertEqual(rc, 0, err.getvalue())
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
@@ -52,16 +57,19 @@ class RenderAgentConfigTest(unittest.TestCase):
             config.write_text(
                 json.dumps(
                     {
+                        "config_schema_version": 3,
                         "node_label": "mini_03",
-                        "node_user": "fleet-mini-03",
-                        "node_home": str(node_home),
-                        "telemetry_mode": "pull",
                         "telemetry_endpoint": "https://telemetry.example.com",
+                        "codex_usage_enabled": False,
                     }
                 ),
                 encoding="utf-8",
             )
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            local = LocalNodeContext("fleet-mini-03", node_home, "arm64", Path("/opt/homebrew"))
+            with patch(
+                "fleet_node_observability.agent.resolve_current_node_context",
+                return_value=local,
+            ), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
                 rc = main(["--config", str(config), "--output", str(output)])
             self.assertEqual(rc, 1)
             self.assertEqual(target.read_text(encoding="utf-8"), "preserve")

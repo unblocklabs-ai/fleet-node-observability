@@ -14,7 +14,6 @@ from urllib.parse import urlparse
 
 from .config import ConfigError, normalize_label
 
-
 COLLECTOR_VERSION = "0.157.0"
 COLLECTOR_RELEASES: dict[str, dict[str, str]] = {
     "darwin_amd64": {
@@ -33,11 +32,10 @@ COLLECTOR_RELEASES: dict[str, dict[str, str]] = {
     },
 }
 
-TELEMETRY_MODES = frozenset({"pull", "dual", "push"})
 HEARTBEAT_METRIC = "fleet_node_agent_heartbeat_timestamp_seconds"
-CENTRAL_CONFIG_SCHEMA_VERSION = 2
+CENTRAL_CONFIG_SCHEMA_VERSION = 3
 CENTRAL_CONFIG_KEYS = frozenset(
-    {"config_schema_version", "node_label", "telemetry_mode", "telemetry_endpoint"}
+    {"config_schema_version", "node_label", "telemetry_endpoint", "codex_usage_enabled"}
 )
 SUPPORTED_HOMEBREW_PREFIXES = (Path("/opt/homebrew"), Path("/usr/local"))
 
@@ -47,8 +45,8 @@ class AgentConfig:
     node_label: str
     node_user: str
     node_home: Path
-    telemetry_mode: str
     telemetry_endpoint: str
+    codex_usage_enabled: bool
     openclaw_config_path: Path
     node_exporter_target: str
     node_exporter_textfile_dir: Path
@@ -87,13 +85,6 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     value = payload.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{key} is required and must be a non-empty string")
-    return value.strip()
-
-
-def _string(payload: dict[str, Any], key: str, default: str) -> str:
-    value = payload.get(key, default)
-    if not isinstance(value, str) or not value.strip():
-        raise ConfigError(f"{key} must be a non-empty string")
     return value.strip()
 
 
@@ -202,7 +193,7 @@ def resolve_current_node_context() -> LocalNodeContext:
     effective_uid = os.geteuid()
     if effective_uid == 0:
         raise ConfigError(
-            "version 2 config without explicit installer context must run as an "
+            "schema 3 config without explicit installer context must run as an "
             "unprivileged node account, not root"
         )
     try:
@@ -225,21 +216,6 @@ def resolve_current_node_context() -> LocalNodeContext:
     )
 
 
-def _assert_legacy_value(
-    payload: dict[str, Any], key: str, expected: str, *, node_home: Path | None = None
-) -> None:
-    if key not in payload:
-        return
-    actual = _string(payload, key, expected)
-    if key.endswith("_path") or key.endswith("_dir") or key == "node_home":
-        actual = str(_absolute_path(actual, key=key, node_home=node_home))
-    if actual != expected:
-        raise ConfigError(
-            f"legacy {key} is an assertion and does not match locally derived value: "
-            f"expected {expected}"
-        )
-
-
 def load_agent_config(
     path: Path | str,
     *,
@@ -247,70 +223,46 @@ def load_agent_config(
     node_home: Path | str | None = None,
     architecture: str | None = None,
     homebrew_prefix: Path | str | None = None,
-    node_exporter_textfile_dir: Path | str | None = None,
 ) -> AgentConfig:
     payload = _load_object(Path(path))
-    is_central_v2 = "config_schema_version" in payload
-    if is_central_v2:
-        version = payload.get("config_schema_version")
-        if isinstance(version, bool) or version != CENTRAL_CONFIG_SCHEMA_VERSION:
-            raise ConfigError(
-                f"config_schema_version must be {CENTRAL_CONFIG_SCHEMA_VERSION}"
-            )
-        unknown_keys = sorted(set(payload) - CENTRAL_CONFIG_KEYS)
-        if unknown_keys:
-            raise ConfigError(
-                "version 2 central config may contain only config_schema_version, "
-                "node_label, telemetry_mode, and telemetry_endpoint; unexpected: "
-                + ", ".join(unknown_keys)
-            )
-        explicit_context = (node_user, node_home, architecture, homebrew_prefix)
-        if all(value is None for value in explicit_context):
-            local = resolve_current_node_context()
-            node_user = local.node_user
-            node_home = local.node_home
-            architecture = local.architecture
-            homebrew_prefix = local.homebrew_prefix
-        elif any(value is None for value in explicit_context):
-            raise ConfigError(
-                "version 2 explicit context requires node_user, node_home, "
-                "architecture, and homebrew_prefix"
-            )
+    version = payload.get("config_schema_version")
+    if isinstance(version, bool) or version != CENTRAL_CONFIG_SCHEMA_VERSION:
+        raise ConfigError(f"config_schema_version must be {CENTRAL_CONFIG_SCHEMA_VERSION}")
+    unexpected = sorted(set(payload) - CENTRAL_CONFIG_KEYS)
+    missing = sorted(CENTRAL_CONFIG_KEYS - set(payload))
+    if unexpected or missing:
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unexpected:
+            details.append("unexpected: " + ", ".join(unexpected))
+        raise ConfigError(
+            "schema 3 config must contain exactly config_schema_version, node_label, "
+            "telemetry_endpoint, and codex_usage_enabled (" + "; ".join(details) + ")"
+        )
+
+    explicit_context = (node_user, node_home, architecture, homebrew_prefix)
+    if all(value is None for value in explicit_context):
+        local = resolve_current_node_context()
+        node_user = local.node_user
+        node_home = local.node_home
+        architecture = local.architecture
+        homebrew_prefix = local.homebrew_prefix
+    elif any(value is None for value in explicit_context):
+        raise ConfigError(
+            "explicit context requires node_user, node_home, architecture, and homebrew_prefix"
+        )
 
     node_label = normalize_label(_required_string(payload, "node_label"))
-    configured_node_user = payload.get("node_user")
-    if node_user is None:
-        resolved_node_user = _validate_node_user(_required_string(payload, "node_user"))
-    else:
-        resolved_node_user = _validate_node_user(node_user.strip())
-        if not resolved_node_user:
-            raise ConfigError("node_user must be a non-empty local account name")
-        if configured_node_user is not None:
-            _assert_legacy_value(payload, "node_user", resolved_node_user)
-
-    if node_home is None:
-        resolved_node_home = _absolute_path(
-            _required_string(payload, "node_home"), key="node_home"
-        )
-    else:
-        resolved_node_home = _absolute_path(str(node_home), key="node_home")
-        _assert_legacy_value(payload, "node_home", str(resolved_node_home))
-    if architecture is not None:
-        _validate_architecture(architecture)
-    resolved_homebrew_prefix = (
-        _validate_homebrew_prefix(homebrew_prefix)
-        if homebrew_prefix is not None
-        else None
-    )
-
-    mode_key = _required_string if is_central_v2 else _string
-    mode = (
-        mode_key(payload, "telemetry_mode")
-        if is_central_v2
-        else mode_key(payload, "telemetry_mode", "push")
-    ).lower()
-    if mode not in TELEMETRY_MODES:
-        raise ConfigError("telemetry_mode must be one of: pull, dual, push")
+    resolved_node_user = _validate_node_user(str(node_user).strip())
+    if not resolved_node_user:
+        raise ConfigError("node_user must be a non-empty local account name")
+    resolved_node_home = _absolute_path(str(node_home), key="node_home")
+    _validate_architecture(str(architecture))
+    resolved_homebrew_prefix = _validate_homebrew_prefix(str(homebrew_prefix))
+    codex_usage_enabled = payload.get("codex_usage_enabled")
+    if type(codex_usage_enabled) is not bool:
+        raise ConfigError("codex_usage_enabled must be a boolean")
     raw_telemetry_endpoint = payload.get("telemetry_endpoint")
     if (
         isinstance(raw_telemetry_endpoint, str)
@@ -326,141 +278,64 @@ def load_agent_config(
         "queue_directory": base_dir / "queue",
         "collector_binary_path": base_dir / "bin" / "otelcol-contrib",
     }
-    strict_local_context = is_central_v2 or any(
-        value is not None
-        for value in (
-            node_user,
-            node_home,
-            architecture,
-            homebrew_prefix,
-            node_exporter_textfile_dir,
-        )
+    expected_textfile_dir = (
+        resolved_homebrew_prefix
+        / "var"
+        / "lib"
+        / "node_exporter"
+        / "textfile_collector"
     )
-    if node_exporter_textfile_dir is not None:
-        expected_textfile_dir = _absolute_path(
-            str(node_exporter_textfile_dir), key="node_exporter_textfile_dir"
-        )
-    elif resolved_homebrew_prefix is not None:
-        expected_textfile_dir = (
-            resolved_homebrew_prefix
-            / "var"
-            / "lib"
-            / "node_exporter"
-            / "textfile_collector"
-        )
-    else:
-        expected_textfile_dir = Path(
-            "/opt/homebrew/var/lib/node_exporter/textfile_collector"
-        )
-
-    if strict_local_context and not is_central_v2:
-        for key, expected in expected_paths.items():
-            _assert_legacy_value(
-                payload, key, str(expected), node_home=resolved_node_home
-            )
-        _assert_legacy_value(payload, "node_exporter_target", "127.0.0.1:9100")
-        _assert_legacy_value(
-            payload,
-            "node_exporter_textfile_dir",
-            str(expected_textfile_dir),
-            node_home=resolved_node_home,
-        )
-        _assert_legacy_value(payload, "local_otlp_endpoint", "127.0.0.1:4318")
-        _assert_legacy_value(
-            payload, "collector_metrics_endpoint", "127.0.0.1:8888"
-        )
-        _assert_legacy_value(payload, "health_endpoint", "127.0.0.1:13133")
 
     config = AgentConfig(
         node_label=node_label,
         node_user=resolved_node_user,
         node_home=resolved_node_home,
-        telemetry_mode=mode,
         telemetry_endpoint=_validate_endpoint(
             _required_string(payload, "telemetry_endpoint")
         ),
+        codex_usage_enabled=codex_usage_enabled,
         openclaw_config_path=_absolute_path(
-            str(expected_paths["openclaw_config_path"])
-            if strict_local_context
-            else _string(payload, "openclaw_config_path", "~/.openclaw/openclaw.json"),
+            str(expected_paths["openclaw_config_path"]),
             key="openclaw_config_path",
             node_home=resolved_node_home,
         ),
         node_exporter_target=_validate_host_port(
-            "127.0.0.1:9100"
-            if strict_local_context
-            else _string(payload, "node_exporter_target", "127.0.0.1:9100"),
+            "127.0.0.1:9100",
             key="node_exporter_target",
             require_loopback=True,
         ),
         node_exporter_textfile_dir=_absolute_path(
-            str(expected_textfile_dir)
-            if strict_local_context
-            else _string(
-                payload,
-                "node_exporter_textfile_dir",
-                "/opt/homebrew/var/lib/node_exporter/textfile_collector",
-            ),
+            str(expected_textfile_dir),
             key="node_exporter_textfile_dir",
         ),
         collector_config_path=_absolute_path(
-            str(expected_paths["collector_config_path"])
-            if strict_local_context
-            else _string(
-                payload,
-                "collector_config_path",
-                str(expected_paths["collector_config_path"]),
-            ),
+            str(expected_paths["collector_config_path"]),
             key="collector_config_path",
         ),
         authorization_header_path=_absolute_path(
-            str(expected_paths["authorization_header_path"])
-            if strict_local_context
-            else _string(
-                payload,
-                "authorization_header_path",
-                str(expected_paths["authorization_header_path"]),
-            ),
+            str(expected_paths["authorization_header_path"]),
             key="authorization_header_path",
         ),
         queue_directory=_absolute_path(
-            str(expected_paths["queue_directory"])
-            if strict_local_context
-            else _string(
-                payload,
-                "queue_directory",
-                str(expected_paths["queue_directory"]),
-            ),
+            str(expected_paths["queue_directory"]),
             key="queue_directory",
         ),
         collector_binary_path=_absolute_path(
-            str(expected_paths["collector_binary_path"])
-            if strict_local_context
-            else _string(
-                payload,
-                "collector_binary_path",
-                str(expected_paths["collector_binary_path"]),
-            ),
+            str(expected_paths["collector_binary_path"]),
             key="collector_binary_path",
         ),
         local_otlp_endpoint=_validate_host_port(
-            "127.0.0.1:4318"
-            if strict_local_context
-            else _string(payload, "local_otlp_endpoint", "127.0.0.1:4318"),
+            "127.0.0.1:4318",
             key="local_otlp_endpoint",
             require_loopback=True,
         ),
         collector_metrics_endpoint=_validate_host_port(
-            "127.0.0.1:8888"
-            if strict_local_context
-            else _string(payload, "collector_metrics_endpoint", "127.0.0.1:8888"),
+            "127.0.0.1:8888",
             key="collector_metrics_endpoint",
             require_loopback=True,
         ),
         health_endpoint=_validate_host_port(
-            "127.0.0.1:13133"
-            if strict_local_context
-            else _string(payload, "health_endpoint", "127.0.0.1:13133"),
+            "127.0.0.1:13133",
             key="health_endpoint",
             require_loopback=True,
         ),
@@ -476,21 +351,6 @@ def load_agent_config(
         except ValueError as exc:
             raise ConfigError(f"{key} must be inside {base_dir}") from exc
     _validate_managed_path_relationships(config, state_directory=base_dir / "state")
-    allowed_textfile_dirs = {
-        Path("/opt/homebrew/var/lib/node_exporter/textfile_collector"),
-        Path("/usr/local/var/lib/node_exporter/textfile_collector"),
-    }
-    if (
-        node_exporter_textfile_dir is None
-        and config.node_exporter_textfile_dir not in allowed_textfile_dirs
-    ):
-        try:
-            config.node_exporter_textfile_dir.relative_to(resolved_node_home)
-        except ValueError as exc:
-            raise ConfigError(
-                "node_exporter_textfile_dir must use a supported Homebrew path "
-                "or live under node_home"
-            ) from exc
     return config
 
 
@@ -537,7 +397,6 @@ def _validate_managed_path_relationships(
 def _resource_processor(config: AgentConfig, source: str) -> dict[str, Any]:
     return {
         "attributes": [
-            {"key": "fleet.transport", "value": config.telemetry_mode, "action": "upsert"},
             {"key": "fleet.signal.source", "value": source, "action": "upsert"},
             {"key": "fleet.claimed_node", "value": config.node_label, "action": "upsert"},
         ]
@@ -614,16 +473,16 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     }
 
     exporters: dict[str, Any] = {
-        "otlp_http/logs": _exporter(
+        "otlphttp/logs": _exporter(
             config, queue_bytes=96 * 1024 * 1024, request_bytes=1024 * 1024, retry_max_elapsed="24h"
         ),
-        "otlp_http/traces": _exporter(
+        "otlphttp/traces": _exporter(
             config, queue_bytes=48 * 1024 * 1024, request_bytes=1024 * 1024, retry_max_elapsed="12h"
         ),
-        "otlp_http/app_metrics": _exporter(
+        "otlphttp/app_metrics": _exporter(
             config, queue_bytes=32 * 1024 * 1024, request_bytes=512 * 1024, retry_max_elapsed="6h"
         ),
-        "otlp_http/agent": _exporter(
+        "otlphttp/agent": _exporter(
             config, queue_bytes=16 * 1024 * 1024, request_bytes=256 * 1024, retry_max_elapsed="30m"
         ),
     }
@@ -632,98 +491,97 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
         "logs/openclaw": {
             "receivers": ["otlp/openclaw"],
             "processors": ["memory_limiter", "resource/openclaw", "batch/logs"],
-            "exporters": ["otlp_http/logs"],
+            "exporters": ["otlphttp/logs"],
         },
         "traces/openclaw": {
             "receivers": ["otlp/openclaw"],
             "processors": ["memory_limiter", "resource/openclaw", "batch/traces"],
-            "exporters": ["otlp_http/traces"],
+            "exporters": ["otlphttp/traces"],
         },
         "metrics/openclaw": {
             "receivers": ["otlp/openclaw"],
             "processors": ["memory_limiter", "resource/openclaw", "batch/app_metrics"],
-            "exporters": ["otlp_http/app_metrics"],
+            "exporters": ["otlphttp/app_metrics"],
         },
         "metrics/agent": {
             "receivers": ["prometheus/agent"],
             "processors": ["memory_limiter", "resource/agent", "batch/agent"],
-            "exporters": ["otlp_http/agent"],
+            "exporters": ["otlphttp/agent"],
         },
     }
 
-    if config.telemetry_mode in {"dual", "push"}:
-        receivers.update(
-            {
-                "prometheus/host": {
-                    "config": {
-                        "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
-                        "scrape_configs": [
-                            {
-                                "job_name": "node_exporter_fleet",
-                                "static_configs": [{"targets": [config.node_exporter_target]}],
-                                "metric_relabel_configs": [
-                                    {
-                                        "source_labels": ["__name__"],
-                                        "regex": HEARTBEAT_METRIC,
-                                        "action": "drop",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                },
-                "prometheus/heartbeat": {
-                    "config": {
-                        "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
-                        "scrape_configs": [
-                            {
-                                "job_name": "fleet_node_agent_heartbeat",
-                                "static_configs": [{"targets": [config.node_exporter_target]}],
-                                "metric_relabel_configs": [
-                                    {
-                                        "source_labels": ["__name__"],
-                                        "regex": HEARTBEAT_METRIC,
-                                        "action": "keep",
-                                    }
-                                ],
-                            }
-                        ],
-                    }
-                },
-            }
-        )
-        processors.update(
-            {
-                "resource/host": _resource_processor(config, "node_agent_host"),
-                "resource/heartbeat": _resource_processor(config, "node_agent_heartbeat"),
-                "batch/host": {"timeout": "3s", "send_batch_size": 1000, "send_batch_max_size": 2000},
-                "batch/heartbeat": {"timeout": "1s", "send_batch_size": 10, "send_batch_max_size": 20},
-            }
-        )
-        exporters.update(
-            {
-                "otlp_http/host": _exporter(
-                    config, queue_bytes=48 * 1024 * 1024, request_bytes=512 * 1024, retry_max_elapsed="6h"
-                ),
-                "otlp_http/heartbeat": _exporter(
-                    config, queue_bytes=8 * 1024 * 1024, request_bytes=64 * 1024, retry_max_elapsed="5m"
-                ),
-            }
-        )
-        pipelines.update(
-            {
-                "metrics/host": {
-                    "receivers": ["prometheus/host"],
-                    "processors": ["memory_limiter", "resource/host", "batch/host"],
-                    "exporters": ["otlp_http/host"],
-                },
-                "metrics/heartbeat": {
-                    "receivers": ["prometheus/heartbeat"],
-                    "processors": ["memory_limiter", "resource/heartbeat", "batch/heartbeat"],
-                    "exporters": ["otlp_http/heartbeat"],
-                },
-            }
-        )
+    receivers.update(
+        {
+            "prometheus/host": {
+                "config": {
+                    "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
+                    "scrape_configs": [
+                        {
+                            "job_name": "node_exporter_fleet",
+                            "static_configs": [{"targets": [config.node_exporter_target]}],
+                            "metric_relabel_configs": [
+                                {
+                                    "source_labels": ["__name__"],
+                                    "regex": HEARTBEAT_METRIC,
+                                    "action": "drop",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            },
+            "prometheus/heartbeat": {
+                "config": {
+                    "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
+                    "scrape_configs": [
+                        {
+                            "job_name": "fleet_node_agent_heartbeat",
+                            "static_configs": [{"targets": [config.node_exporter_target]}],
+                            "metric_relabel_configs": [
+                                {
+                                    "source_labels": ["__name__"],
+                                    "regex": HEARTBEAT_METRIC,
+                                    "action": "keep",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    processors.update(
+        {
+            "resource/host": _resource_processor(config, "node_agent_host"),
+            "resource/heartbeat": _resource_processor(config, "node_agent_heartbeat"),
+            "batch/host": {"timeout": "3s", "send_batch_size": 1000, "send_batch_max_size": 2000},
+            "batch/heartbeat": {"timeout": "1s", "send_batch_size": 10, "send_batch_max_size": 20},
+        }
+    )
+    exporters.update(
+        {
+            "otlphttp/host": _exporter(
+                config, queue_bytes=48 * 1024 * 1024, request_bytes=512 * 1024, retry_max_elapsed="6h"
+            ),
+            "otlphttp/heartbeat": _exporter(
+                config, queue_bytes=8 * 1024 * 1024, request_bytes=64 * 1024, retry_max_elapsed="5m"
+            ),
+        }
+    )
+    pipelines.update(
+        {
+            "metrics/host": {
+                "receivers": ["prometheus/host"],
+                "processors": ["memory_limiter", "resource/host", "batch/host"],
+                "exporters": ["otlphttp/host"],
+            },
+            "metrics/heartbeat": {
+                "receivers": ["prometheus/heartbeat"],
+                "processors": ["memory_limiter", "resource/heartbeat", "batch/heartbeat"],
+                "exporters": ["otlphttp/heartbeat"],
+            },
+        }
+    )
 
     return {
         "extensions": {
@@ -766,11 +624,7 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
 
 
 def render_openclaw_local_settings(config: AgentConfig) -> dict[str, Any]:
-    return {
-        "endpoint": f"http://{config.local_otlp_endpoint}",
-        "service_name": "openclaw_gateway",
-        "headers": {},
-    }
+    return {"endpoint": f"http://{config.local_otlp_endpoint}"}
 
 
 def render_authorization_header(node_label: str, token: str) -> str:
@@ -779,5 +633,5 @@ def render_authorization_header(node_label: str, token: str) -> str:
     if not token or "\n" in token or "\r" in token:
         raise ConfigError("ingest token must be non-empty and contain no newlines")
     normalized = normalize_label(node_label)
-    encoded = base64.b64encode(f"{normalized}:{token}".encode("utf-8")).decode("ascii")
+    encoded = base64.b64encode(f"{normalized}:{token}".encode()).decode("ascii")
     return f"Basic {encoded}"

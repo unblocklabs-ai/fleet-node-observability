@@ -1,15 +1,10 @@
 # Changelog
 
-## 0.2.0 - Unreleased pre-cutover implementation
+## 0.2.0 - Unreleased
 
-- Added one topology-independent `install-fleet-node-agent` entrypoint and node
-  configuration shape for `pull`, `dual`, and `push` rollout states.
-- Reduced version 2 central node config to four intent fields. The unified installer now requires
-  an explicit node account for both v2 and legacy input, resolves its real home and local
-  architecture, selects one verified Homebrew/node_exporter prefix, derives internal paths, and
-  freezes the complete resolved config before managed filesystem changes. Direct helpers resolve
-  equivalent unprivileged local context and refuse implicit root context. Unversioned rich config
-  remains a temporary fail-closed assertion format.
+- Added one node installer and one exact schema-3 intent containing node label, canonical HTTPS
+  telemetry endpoint, and Codex usage capability. Accounts, paths, architecture, package locations,
+  and loopback settings are resolved locally.
 - Pinned OpenTelemetry Collector Contrib 0.157.0 for Intel and Apple Silicon
   macOS, with SHA-256 verification and config validation before launch.
 - Routed OpenClaw through a loopback-only OTLP/HTTP receiver so the Collector is
@@ -26,13 +21,11 @@
   `account/read` and `account/rateLimits/read` methods. The collector no longer
   reads or writes Codex OAuth files, calls a private ChatGPT endpoint, or
   reconstructs account usage from session transcripts.
-- Retained the hardened custom OpenClaw JSON writer after Phase 4 review found no evidence that the
-  available OpenClaw runtime and diagnostics-otel plugin pair are a compatible replacement. The
-  `v2026.4.29` floor establishes command availability only. A future native patch must explicitly
-  replace `diagnostics.otel.headers`, preserve or deliberately revise the timestamped-backup
-  contract, resolve `captureContent` privacy (recommended default: `false`), restart OpenClaw, and
-  prove actual OTLP receipt before delegation or cutover.
-- Kept the `0.1.x` LAN/off-LAN commands as documented rollback compatibility.
+- Kept the hardened OpenClaw JSON writer, replacing the complete header object, making private
+  timestamped backups, writing atomically, and disabling content capture.
+- Removed the unreleased transition states and the older topology-specific installers, direct
+  central OpenClaw exporter, public exporter tunnel support, scrape credential and proxy, and
+  migration-only cleanup commands from the active release.
 
 ## 0.1.3 - 2026-07-07
 

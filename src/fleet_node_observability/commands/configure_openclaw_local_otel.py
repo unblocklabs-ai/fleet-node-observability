@@ -8,8 +8,8 @@ from pathlib import Path
 
 from ..agent import load_agent_config, render_openclaw_local_settings
 from ..config import ConfigError
-from .configure_openclaw_otel import (
-    apply_diagnostics_payload,
+from ..openclaw import (
+    apply_loopback_diagnostics,
     load_openclaw_config,
     write_openclaw_config,
 )
@@ -29,15 +29,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_agent_config(args.config)
         settings = render_openclaw_local_settings(config)
-        payload = apply_diagnostics_payload(
-            load_openclaw_config(config.openclaw_config_path),
+        loaded = load_openclaw_config(config.openclaw_config_path)
+        payload = apply_loopback_diagnostics(
+            loaded.payload,
             endpoint=settings["endpoint"],
-            service_name=settings["service_name"],
-            headers=settings["headers"],
         )
         backup = write_openclaw_config(
             config.openclaw_config_path,
             payload,
+            expected=loaded.revision,
             backup=not args.no_backup,
         )
     except ConfigError as exc:

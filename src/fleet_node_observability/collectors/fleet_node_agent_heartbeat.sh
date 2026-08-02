@@ -95,12 +95,12 @@ queue_age() {
   echo '# HELP fleet_node_agent_queue_oldest_age_seconds Seconds since a signal queue was first continuously observed non-empty.'
   echo '# TYPE fleet_node_agent_queue_oldest_age_seconds gauge'
   for mapping in \
-    'logs:otlp_http/logs' \
-    'traces:otlp_http/traces' \
-    'openclaw_metrics:otlp_http/app_metrics' \
-    'agent_metrics:otlp_http/agent' \
-    'host_metrics:otlp_http/host' \
-    'heartbeat:otlp_http/heartbeat'; do
+    'logs:otlphttp/logs' \
+    'traces:otlphttp/traces' \
+    'openclaw_metrics:otlphttp/app_metrics' \
+    'agent_metrics:otlphttp/agent' \
+    'host_metrics:otlphttp/host' \
+    'heartbeat:otlphttp/heartbeat'; do
     signal="${mapping%%:*}"
     exporter="${mapping#*:}"
     printf 'fleet_node_agent_queue_oldest_age_seconds{node="%s",signal="%s"} %s\n' \

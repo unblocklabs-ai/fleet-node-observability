@@ -24,7 +24,7 @@ class PackagingContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return output_dir / f"fleet-node-observability-{VERSION}.tar.gz"
 
-    def test_build_release_excludes_scripts_directory(self) -> None:
+    def test_build_release_contains_final_runtime_and_excludes_tests(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             tarball = self.build_release(Path(temp_dir))
 
@@ -32,10 +32,14 @@ class PackagingContractTests(unittest.TestCase):
             with tarfile.open(tarball) as archive:
                 names = archive.getnames()
 
-            self.assertFalse(
-                any(name.startswith(f"fleet-node-observability-{VERSION}/scripts") for name in names),
-                "release artifact must not include the broad legacy scripts/ path",
-            )
+            for required in [
+                "bin/install-fleet-node-agent",
+                "examples/node-agent.example.json",
+                "src/fleet_node_observability/agent.py",
+                "src/fleet_node_observability/atomic.py",
+                "src/fleet_node_observability/openclaw.py",
+            ]:
+                self.assertIn(f"fleet-node-observability-{VERSION}/{required}", names)
             self.assertFalse(
                 any(name.startswith(f"fleet-node-observability-{VERSION}/tests") for name in names),
                 "release artifact must not include development-only tests/",

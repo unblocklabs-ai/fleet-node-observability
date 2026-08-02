@@ -1,247 +1,113 @@
 # Fleet Node Observability
 
-Node-side observability tooling for OpenClaw fleet hosts.
+Node-side telemetry for managed OpenClaw macOS hosts. The central Grafana, Alloy, Prometheus, Loki,
+Tempo, inventory, credential, and Charizard deployment code lives in the separate central
+`fleet-observability` repository.
 
-This repository is intended to hold the code that runs on each managed Mac mini:
-installers, host-health collectors, node-local textfile metrics, and helpers for
-configuring OpenClaw OTLP export to the central fleet observability stack.
+## Architecture
 
-The central observability stack remains separate. Grafana, Alloy, Prometheus,
-Loki, Tempo, dashboards, alerts, fleet inventory, and Charizard deployment logic
-belong in the central `fleet-observability` repository.
+Every node runs the same local services:
 
-## Unified Agent (0.2.0 pre-cutover)
+- OpenClaw sends OTLP/HTTP logs, metrics, and traces to `127.0.0.1:4318` with no central credential.
+- A pinned OpenTelemetry Collector Contrib process receives OpenClaw telemetry, scrapes loopback
+  node_exporter and its own metrics, batches and queues each signal, and sends authenticated
+  OTLP/HTTP to one canonical HTTPS endpoint.
+- node_exporter listens only on `127.0.0.1:9100` and includes local textfile metrics.
+- Scheduled producers emit agent heartbeat, OpenClaw readiness, and macOS thermal metrics. Codex
+  usage collection is enabled per node.
 
-The current `0.1.x` implementation preserves separate LAN and off-LAN install and transport paths
-for compatibility with production. Those paths are transitional technical debt.
+Only the Collector makes network requests to Charizard. Physical network location does not change
+the node code, protocol, credential, or service layout.
 
-The `0.2.0` node runtime and schema-v2 contract are implemented locally, but Phase 4 stopped at the
-evidence boundary: there has been no canary install, OpenClaw restart, or proof that real OpenClaw
-logs, metrics, and traces traverse the local Collector and arrive at Charizard. Nothing in this
-repository is production-cut-over or approved for deletion of the `0.1.x` rollback paths.
+## Node intent
 
-The `0.2.0` implementation gives every node the same contract:
+The only accepted configuration is schema 3 with exactly four fields:
 
-- one installer and one configuration shape;
-- one Charizard-issued, revocable node credential;
-- one canonical HTTPS OTLP/HTTP endpoint on Charizard, normally reached through Cloudflare Tunnel;
-- OpenClaw logs, metrics, and traces sent to the loopback node agent; and
-- one node agent that forwards those signals, locally scraped host metrics, self-metrics, and
-  heartbeat through the authenticated Charizard endpoint.
+```json
+{
+  "config_schema_version": 3,
+  "node_label": "mini_03",
+  "telemetry_endpoint": "https://telemetry.example.com",
+  "codex_usage_enabled": true
+}
+```
 
-Charizard will not scrape nodes in the target model. Nodes will not expose a fleet monitoring port,
-run a per-node exporter tunnel, or choose behavior from `lan` versus `off_lan`. A future local route
-may use split DNS or an endpoint override, but it must preserve the same protocol, credential, and
-node runtime.
+The central repository owns this intent. The installer resolves the node account, home directory,
+architecture, Homebrew prefix, binaries, runtime directories, textfile directory, and loopback
+ports locally. Extra or missing fields are rejected.
 
-See [`docs/central-integration-plan.md`](docs/central-integration-plan.md) for the migration plan.
+## Install interface
 
-The implemented unified agent is OpenTelemetry Collector Contrib `0.157.0`, pinned by platform URL
-and SHA-256. Its rendered configuration makes it the only node process that owns central telemetry
-requests: OpenClaw sends OTLP/HTTP to `127.0.0.1:4318`, and the agent scrapes local node_exporter and
-Collector self-metrics, then batches, gzips, persists, retries, and exports each signal through the
-same authenticated HTTPS base endpoint. The Phase 4 receipt gate above is still required before
-treating that locally validated configuration as proven production behavior.
-
-Central state renders the versioned, secret-free intent file shown in
-`examples/node-agent.example.json`. Its only fields are `config_schema_version`, `node_label`,
-`telemetry_mode`, and `telemetry_endpoint`. The node account and every machine path are resolved
-locally by the installer. Put the raw node credential in a separate mode-`0600` file owned by and
-readable by the node account, then install:
+Installation is intentionally not performed by this repository cleanup. A later deployment step
+will provide a schema-3 config and a protected per-node token file to:
 
 ```bash
-chmod 0600 /absolute/path/to/ingest-token
 sudo ./bin/install-fleet-node-agent \
   --config /absolute/path/to/node-agent.json \
   --node-user fleet-mini-03 \
-  --ingest-token-file /absolute/path/to/ingest-token
+  --ingest-token-file /absolute/protected/ingest-token
 ```
 
-`--node-user` is required for every unified install, including temporary legacy rich config. The
-installer selects and verifies the Homebrew installation that owns (or will install)
-`node_exporter`, then defaults the textfile directory to
-`<that-prefix>/var/lib/node_exporter/textfile_collector`. Use the node-local
-`--node-exporter-textfile-dir` override only when node_exporter is intentionally configured with a
-different directory.
+The token file may remain root-owned mode `0600`. Before any managed host write, the root installer
+descriptor-opens it with no symlink following, verifies that it is a private, stable, bounded regular
+file containing exactly one token, and copies only that token into a mode-`0400` temporary snapshot
+owned by the node account. The unprivileged secret writer reads that snapshot, and the root cleanup
+trap removes it. Token contents never enter argv, environment variables, generated JSON, or output.
+The installed runtime contains only the complete Basic Authorization header in the node-owned
+mode-`0600` Collector secret file.
 
-The installer validates the pinned Collector config and proves the Collector's local health. In
-`dual` and `push`, it also proves the node_exporter scrape and a fresh heartbeat before rewriting
-OpenClaw to loopback OTLP, after creating a timestamped backup of any existing config. It never
-accepts a token in argv or the environment. Review any backup and restart OpenClaw after
-installation. `--skip-openclaw-config` is the explicit exception for staged operator workflows.
+The installer:
 
-The OpenClaw rewrite still uses this repository's hardened JSON writer: it validates object shape,
-creates a timestamped mode-`0600` backup of an existing config by default, writes atomically with
-fsync, sends OpenClaw only to loopback, and replaces `diagnostics.otel.headers` with an empty object
-so the central credential remains Collector-only. Keep that writer for the current pre-cutover runtime.
-The available native `openclaw config` command is not yet a proven replacement: OpenClaw
-`v2026.4.29` is only the known command-feature floor, not evidence that the installed runtime and
-diagnostics-otel plugin pair emit compatible telemetry. A future native patch must use
-`--replace-path diagnostics.otel.headers`; merge semantics must not leave stale central headers.
-Its backup behavior must also be reconciled with the current timestamped-backup contract.
+1. snapshots and validates the source config before managed writes;
+2. resolves and freezes local machine context;
+3. downloads or accepts the pinned Collector archive and verifies its SHA-256;
+4. renders and validates the complete Collector configuration;
+5. installs the final LaunchDaemons and proves Collector health, node_exporter metrics, and a fresh
+   heartbeat; and
+6. atomically points OpenClaw at loopback OTLP after making a private timestamped backup when an
+   existing config is present.
 
-Current code sets `diagnostics.otel.captureContent=true`. Whether message/tool content may be
-captured is an unresolved privacy decision; the recommended default is `false` before fleet
-delegation unless the owner explicitly accepts content capture. Do not change writers or delegate
-the rollout until the chosen setting is documented and tested. The release gate also requires an
-OpenClaw restart followed by proof of actual OTLP receipt, not merely valid JSON or a healthy local
-Collector.
+OpenClaw content capture is disabled. Its OTLP headers are replaced with an empty object so stale
+central credentials cannot remain in `openclaw.json`.
 
-The installer proves that `--node-user` is an unprivileged local account, obtains its real home
-from macOS directory services, detects the local architecture, derives the OpenClaw and package
-paths, and freezes that complete resolved config before making changes.
-Root writes protected staging files and the required system LaunchDaemon, rollback, and retirement
-artifacts under `/Library`; runtime binaries, config, credentials, queue/state directories, logs,
-and textfile paths are installed as the node user. This keeps a node-user path replacement from
-turning an installer race into a privileged filesystem write. The contract tests exercise the
-privilege boundary and symlink rejection, but a real path-swap race still needs final validation in
-a disposable macOS VM before production rollout.
+## Backpressure
 
-Existing unversioned rich config remains a temporary compatibility input. When the unified
-installer receives it, `node_user`, `node_home`, OpenClaw/runtime paths, loopback endpoints, and the
-textfile path are assertions against locally resolved values; any mismatch fails closed. Version 2
-does not permit those fields, so central inventory cannot become the owner of node filesystem
-layout.
+Collector Contrib `0.157.0` is pinned by platform URL and SHA-256. All six pipelines are always
+rendered: OpenClaw logs, traces, and metrics; host metrics; Collector self-metrics; and heartbeat.
+They use gzip, finite retries, bounded persistent byte queues, one queue consumer, and capped request
+batches. Queue exhaustion drops the affected signal instead of blocking OpenClaw.
 
-The shipped render, secret, and OpenClaw helpers also accept the canonical v2 file when run directly
-as the intended unprivileged node account. They derive that account's directory-service home, local
-architecture, and selected supported Homebrew prefix. They fail clearly under root; root automation
-must use the unified installer so account context remains explicit.
+The heartbeat producer emits queue-metric availability and bounded per-signal oldest-backlog-age
+gauges so central alerts can distinguish current liveness from delayed replay.
 
-Codex usage collection has one supported data path: the installed `codex app-server` methods
-`account/read` and `account/rateLimits/read`, under a bounded timeout. Codex alone owns login and
-token refresh. Node code does not read or write Codex OAuth files, call private ChatGPT endpoints,
-or reconstruct usage from session transcripts.
-
-`telemetry_mode` is rollout state, not network location:
-
-- `pull`: OpenClaw uses the local agent; the preserved legacy host-metric service is restored and
-  the push heartbeat LaunchDaemon is removed.
-- `dual`: the preserved legacy host-metric service remains canonical, while host metrics and the
-  node heartbeat are also pushed under canary jobs.
-- `push`: pushed host metrics use the canonical job and node_exporter is rebound to loopback. The
-  exact prior system LaunchDaemon or user LaunchAgent is retained as a rollback artifact.
-
-Move only one step at a time. After central parity and rollback evidence is accepted, a push node
-may retire its legacy scrape proxy explicitly with `--retire-legacy-pull`. Per-node Cloudflare
-tunnel deletion remains a central operator cutover action. Pull and dual fail closed if no legacy
-artifact can be restored; a preserved loopback service also requires its scrape proxy. Explicit
-retirement records a durable marker and disables automatic rollback until an operator manually
-restores the retired artifacts. Reinstalling the same mode is idempotent and does not replace the
-saved rollback copy.
-
-### Backpressure contract
-
-The Collector uses a 96 MiB memory limit, gzip, and finite exponential retries. In `pull`, its four
-base disk-backed queues total about 192 MiB: logs 96 MiB, traces 48 MiB, OpenClaw metrics 32 MiB,
-and agent self-metrics 16 MiB. In `dual` and `push`, host metrics add 48 MiB and heartbeat adds
-8 MiB, producing six queues totaling about 248 MiB. Each queue has one consumer to cap replay
-concurrency. This is a bounded drain, not a precise requests-per-second limiter. When capacity or
-retry age is exhausted, the affected signal is dropped instead of blocking OpenClaw; this can
-include OpenClaw logs and traces. Queue capacity/size and rejection metrics are exported by the
-agent itself.
-Queue-side batching caps serialized outbound requests at 1 MiB for logs/traces, 512 KiB for
-OpenClaw/host metrics, 256 KiB for agent metrics, and 64 KiB for heartbeat, with a one-second flush.
-The heartbeat textfile also emits a bounded per-signal
-`fleet_node_agent_queue_oldest_age_seconds` gauge, plus a local queue-metrics availability gauge,
-so an operator can distinguish a continuously backed-up queue from a transient sample.
-
-## Scope
-
-This repo should contain:
-
-- node_exporter installation and verification scripts
-- macOS LaunchDaemon or LaunchAgent installers for node-local collectors
-- OpenClaw OTLP environment/config helpers
-- the unified node-local metrics-to-OTLP collector and installer during pre-cutover validation
-- transitional LAN/off-LAN compatibility helpers until the push cutover is complete
-- legacy shipper cleanup helpers
-- node-local collectors for OpenClaw readiness, Codex usage, thermal pressure,
-  and other host-health textfile metrics
-- tests for node-side behavior and install output
-
-This repo should not contain:
-
-- Grafana dashboards or provisioning
-- central Alloy configuration
-- Prometheus, Loki, or Tempo server configuration
-- central fleet inventory or raw secrets
-- Charizard deployment scripts
-- live dashboard audit artifacts
-
-## Compatibility Quick Start (0.1.x)
-
-The following commands describe the topology-specific `0.1.x` rollback release. They remain
-available during the `0.2.0` dual-run window; they are not the target onboarding interface.
-
-Prepare a sanitized node config, then install host metrics and configure OpenClaw
-OTLP separately:
-
-```bash
-cp examples/node-config.lan.example.json /tmp/node-config.lan.json
-./bin/install-lan-host-metrics --config /tmp/node-config.lan.json
-FLEET_INGEST_TOKEN=<token> ./bin/configure-openclaw-otel --config /tmp/node-config.lan.json
-```
-
-For off-LAN host metrics:
-
-```bash
-cp examples/node-config.off-lan.example.json /tmp/node-config.off-lan.json
-sudo ./bin/install-off-lan-host-metrics --config /tmp/node-config.off-lan.json
-FLEET_INGEST_TOKEN=<token> ./bin/configure-openclaw-otel --config /tmp/node-config.off-lan.json
-```
-
-## Planning Docs
-
-- [`docs/central-integration-plan.md`](docs/central-integration-plan.md) is the current staged
-  transition and cutover plan.
-- [`docs/central-contract.md`](docs/central-contract.md) records the target cross-repository product
-  and ownership contract used by that plan.
-
-Completed extraction and repository-layout plans were removed after their durable ownership and
-transition decisions were incorporated into these current documents. Their history remains in Git.
-
-## Compatibility Contract
-
-The compatibility release must continue emitting data that the central stack can rely on during
-migration:
-
-- stable `node` and `node_label` values
-- OpenClaw OTLP logs, metrics, and traces authenticated with central Basic auth
-- optional Cloudflare Access headers for off-LAN OTLP
-- node_exporter textfile metrics for fleet state, OpenClaw gateway readiness,
-  Codex usage, and macOS thermal pressure
-- bounded labels suitable for Prometheus and Loki
-
-The target stable interface is one authenticated OTLP/HTTP push contract for OpenClaw and host
-telemetry. Metric meaning and bounded labels must survive the transport migration.
-
-Any breaking change to emitted metric names, label names, OTLP headers, or file
-paths should be versioned and documented before central dashboards or alerts
-depend on it.
-
-## Repository Layout
+## Repository scope
 
 ```text
-bin/        Stable operator command surface.
-src/        Stdlib-only implementation package and installer bodies.
-docs/       Operator docs, design notes, and compatibility contracts.
-examples/   Sanitized node config examples.
-packaging/  Local-first release artifact helpers.
-tests/      Unit and contract tests for node-side behavior.
+bin/        Stable operator entrypoints.
+src/        Agent rendering, installer, local collectors, and secure writers.
+docs/       Current node and central contracts.
+examples/   Sanitized schema-3 node intent.
+packaging/  Versioned tarball and checksum helpers.
+tests/      Unit, security, installer, and packaging contracts.
 ```
 
 ## Development
 
-The Python package has no third-party runtime dependencies. The unified macOS installer still
-requires Homebrew and uses it to find or install `node_exporter`; it downloads the pinned Collector
-archive itself unless `--collector-archive` is supplied. Keep scripts portable to the target Mac
-mini environment unless another dependency is deliberately introduced and documented.
-
-Expected local checks after extraction:
+The Python package has no third-party runtime dependencies. Run:
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
-python3 -m py_compile $(find src tests -name "*.py" -print)
-bash -n bin/* packaging/*.sh src/fleet_node_observability/collectors/*.sh src/fleet_node_observability/installers/*.sh
+python3 -m compileall -q src tests
+for script in bin/collect-* bin/install-* bin/openclaw-* packaging/*.sh \
+  src/fleet_node_observability/collectors/*.sh \
+  src/fleet_node_observability/installers/*.sh; do bash -n "$script"; done
 ```
+
+Build release evidence outside the repository's existing `dist/` directory:
+
+```bash
+./packaging/build-release.sh --output "$(mktemp -d)"
+```
+
+See [central contract](docs/central-contract.md), [OpenClaw configuration](docs/openclaw-otel.md),
+[textfile metrics](docs/textfile-metrics.md), and [troubleshooting](docs/troubleshooting.md).

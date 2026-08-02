@@ -8,8 +8,15 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
-from fleet_node_observability.commands.write_agent_secret import main
+from fleet_node_observability.agent import LocalNodeContext
+from fleet_node_observability.commands.write_agent_secret import (
+    MAX_TOKEN_FILE_BYTES,
+    main,
+    read_protected_token,
+)
+from fleet_node_observability.config import ConfigError
 
 
 class AgentSecretTest(unittest.TestCase):
@@ -26,12 +33,10 @@ class AgentSecretTest(unittest.TestCase):
         config_path.write_text(
             json.dumps(
                 {
+                    "config_schema_version": 3,
                     "node_label": "Mini-03",
-                    "node_user": "fleet-mini-03",
-                    "node_home": str(node_home),
-                    "telemetry_mode": "push",
                     "telemetry_endpoint": "https://telemetry.example.com",
-                    "authorization_header_path": str(secret_path),
+                    "codex_usage_enabled": True,
                 }
             ),
             encoding="utf-8",
@@ -41,7 +46,16 @@ class AgentSecretTest(unittest.TestCase):
         token_path.chmod(token_mode)
         out = StringIO()
         err = StringIO()
-        with redirect_stdout(out), redirect_stderr(err):
+        local = LocalNodeContext(
+            node_user="fleet-mini-03",
+            node_home=node_home,
+            architecture="arm64",
+            homebrew_prefix=Path("/opt/homebrew"),
+        )
+        with patch(
+            "fleet_node_observability.agent.resolve_current_node_context",
+            return_value=local,
+        ), redirect_stdout(out), redirect_stderr(err):
             rc = main(["--config", str(config_path), "--token-file", str(token_path)])
         return rc, out.getvalue(), err.getvalue(), secret_path, temp
 
@@ -100,6 +114,49 @@ class AgentSecretTest(unittest.TestCase):
                 self.assertNotIn("secret-token", err)
                 assert secret_path is not None
                 self.assertFalse(secret_path.exists())
+
+    def test_descriptor_reader_rejects_symlink_and_oversized_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            target = root / "target"
+            target.write_text("secret", encoding="utf-8")
+            target.chmod(0o600)
+            link = root / "token"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(ConfigError, "unable to read|not a symlink"):
+                read_protected_token(link)
+
+            oversized = root / "oversized"
+            oversized.write_bytes(b"x" * (MAX_TOKEN_FILE_BYTES + 1))
+            oversized.chmod(0o600)
+            with self.assertRaisesRegex(ConfigError, "safety limit"):
+                read_protected_token(oversized)
+
+    def test_descriptor_reader_detects_path_replacement_during_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            path = root / "token"
+            path.write_text("original-token", encoding="utf-8")
+            path.chmod(0o600)
+            displaced = root / "displaced"
+            real_read = __import__("os").read
+            replaced = False
+
+            def replacing_read(descriptor: int, size: int) -> bytes:
+                nonlocal replaced
+                if not replaced:
+                    path.rename(displaced)
+                    path.write_text("replacement-token", encoding="utf-8")
+                    path.chmod(0o600)
+                    replaced = True
+                return real_read(descriptor, size)
+
+            with patch(
+                "fleet_node_observability.commands.write_agent_secret.os.read",
+                side_effect=replacing_read,
+            ), self.assertRaisesRegex(ConfigError, "changed while it was being read"):
+                read_protected_token(path)
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement-token")
 
 
 if __name__ == "__main__":

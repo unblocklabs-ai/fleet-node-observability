@@ -1,6 +1,6 @@
 {
-  "config_schema_version": 2,
+  "config_schema_version": 3,
   "node_label": "mini_03",
-  "telemetry_mode": "dual",
-  "telemetry_endpoint": "https://telemetry.example.com"
+  "telemetry_endpoint": "https://telemetry.example.com",
+  "codex_usage_enabled": true
 }

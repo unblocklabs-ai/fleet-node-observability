@@ -9,8 +9,11 @@ import sys
 from pathlib import Path
 
 from ..agent import load_agent_config, render_authorization_header
+from ..atomic import write_private_atomic
 from ..config import ConfigError
-from .configure_openclaw_otel import _write_secure_atomic
+
+MAX_TOKEN_FILE_BYTES = 16 * 1024
+_STABLE_STAT_FIELDS = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -20,22 +23,62 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
-def _read_protected_token(path: Path) -> str:
+def read_protected_token(path: Path) -> str:
+    descriptor = -1
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        info = path.lstat()
+        descriptor = os.open(path, flags)
     except FileNotFoundError as exc:
         raise ConfigError(f"ingest token file {path} not found") from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise ConfigError("ingest token file must be a regular file, not a symlink")
-    if stat.S_IMODE(info.st_mode) & 0o077:
-        raise ConfigError("ingest token file must not be readable or writable by group or other")
-    try:
-        with path.open("r", encoding="utf-8", newline="") as handle:
-            contents = handle.read()
     except OSError as exc:
         raise ConfigError(f"unable to read ingest token file: {exc}") from exc
 
-    token = contents[:-1] if contents.endswith("\n") else contents
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ConfigError("ingest token file must be a regular file, not a symlink")
+        if stat.S_IMODE(before.st_mode) & 0o077:
+            raise ConfigError(
+                "ingest token file must not be readable or writable by group or other"
+            )
+        if before.st_size > MAX_TOKEN_FILE_BYTES:
+            raise ConfigError(
+                f"ingest token file exceeds the {MAX_TOKEN_FILE_BYTES}-byte safety limit"
+            )
+
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_TOKEN_FILE_BYTES:
+            chunk = os.read(descriptor, min(4096, MAX_TOKEN_FILE_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        if total > MAX_TOKEN_FILE_BYTES:
+            raise ConfigError(
+                f"ingest token file exceeds the {MAX_TOKEN_FILE_BYTES}-byte safety limit"
+            )
+
+        after = os.fstat(descriptor)
+        try:
+            current = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise ConfigError("ingest token file changed while it was being read") from exc
+        if any(
+            getattr(before, field) != getattr(after, field)
+            or getattr(after, field) != getattr(current, field)
+            for field in _STABLE_STAT_FIELDS
+        ):
+            raise ConfigError("ingest token file changed while it was being read")
+    finally:
+        os.close(descriptor)
+
+    try:
+        contents = b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigError("ingest token file must contain valid UTF-8") from exc
+
+    token = contents.removesuffix("\n")
     if (
         not token
         or "\r" in contents
@@ -53,9 +96,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         config = load_agent_config(args.config)
-        header = render_authorization_header(config.node_label, _read_protected_token(args.token_file))
+        header = render_authorization_header(config.node_label, read_protected_token(args.token_file))
         config.authorization_header_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        _write_secure_atomic(config.authorization_header_path, header)
+        write_private_atomic(config.authorization_header_path, header)
         os.chmod(config.authorization_header_path.parent, 0o700)
     except (ConfigError, OSError) as exc:
         print(exc, file=sys.stderr)

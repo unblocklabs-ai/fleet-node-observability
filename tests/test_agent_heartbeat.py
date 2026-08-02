@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "src" / "fleet_node_observability" / "collectors" / "fleet_node_agent_heartbeat.sh"
 
@@ -52,7 +51,7 @@ class AgentHeartbeatTest(unittest.TestCase):
                 "MOCK_METRICS_FILE": str(metrics),
             }
             metrics.write_text(
-                'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 128\n',
+                'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs"} 128\n',
                 encoding="utf-8",
             )
             state_dir = root / "state"
@@ -71,7 +70,7 @@ class AgentHeartbeatTest(unittest.TestCase):
             )
 
             metrics.write_text(
-                'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 0\n',
+                'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs"} 0\n',
                 encoding="utf-8",
             )
             drained = self.run_heartbeat(root, state_dir, env=env)

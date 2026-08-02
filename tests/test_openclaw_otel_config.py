@@ -1,221 +1,116 @@
 from __future__ import annotations
 
-import base64
 import json
 import stat
 import tempfile
 import unittest
 from pathlib import Path
-from urllib.parse import unquote
 
-from fleet_node_observability.commands.configure_openclaw_otel import main as configure_main
-from fleet_node_observability.commands.configure_openclaw_local_otel import main as local_main
-from fleet_node_observability.commands.print_otlp_env import main as print_main
+from fleet_node_observability.config import ConfigError
+from fleet_node_observability.openclaw import (
+    apply_loopback_diagnostics,
+    load_openclaw_config,
+    write_openclaw_config,
+)
 
 
-class OpenClawOtlpCommandTest(unittest.TestCase):
-    def _run_print(self, args: list[str]) -> tuple[int, str, str]:
-        from io import StringIO
-        from contextlib import redirect_stdout, redirect_stderr
-
-        stdout = StringIO()
-        stderr = StringIO()
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            rc = print_main(args)
-        return rc, stdout.getvalue(), stderr.getvalue()
-
-    def _run_configure(self, args: list[str]) -> tuple[int, str, str]:
-        from io import StringIO
-        from contextlib import redirect_stdout, redirect_stderr
-
-        stdout = StringIO()
-        stderr = StringIO()
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            rc = configure_main(args)
-        return rc, stdout.getvalue(), stderr.getvalue()
-
-    def _parse_otlp_headers(self, output: str) -> dict[str, str]:
-        line = next(line for line in output.splitlines() if "OTEL_EXPORTER_OTLP_HEADERS=" in line)
-        encoded = line.split('OTEL_EXPORTER_OTLP_HEADERS="', 1)[1].split('"', 1)[0]
-        return {
-            key: unquote(value) for key, value in (item.split("=", 1) for item in encoded.split(","))
+class OpenClawConfigTest(unittest.TestCase):
+    def test_loopback_settings_replace_headers_and_disable_content_capture(self) -> None:
+        payload = {
+            "unrelated": True,
+            "diagnostics": {
+                "otel": {
+                    "traces": False,
+                    "metrics": False,
+                    "logs": False,
+                    "logsExporter": "console",
+                    "tracesEndpoint": "https://stale.example/traces",
+                    "metricsEndpoint": "https://stale.example/metrics",
+                    "logsEndpoint": "https://stale.example/logs",
+                    "headers": {"Authorization": "Basic secret", "Other": "stale"},
+                }
+            },
         }
+        updated = apply_loopback_diagnostics(payload, endpoint="http://127.0.0.1:4318")
+        self.assertTrue(updated["unrelated"])
+        otel = updated["diagnostics"]["otel"]
+        self.assertEqual(otel["endpoint"], "http://127.0.0.1:4318")
+        self.assertEqual(otel["headers"], {})
+        self.assertFalse(otel["captureContent"])
+        self.assertTrue(otel["logs"])
+        self.assertTrue(otel["metrics"])
+        self.assertTrue(otel["traces"])
+        self.assertEqual(otel["logsExporter"], "otlp")
+        for old_endpoint in ("tracesEndpoint", "metricsEndpoint", "logsEndpoint"):
+            self.assertNotIn(old_endpoint, otel)
 
-    def test_print_command_uses_explicit_node_config_json(self) -> None:
+    def test_rejects_non_object_diagnostics(self) -> None:
+        for payload in ({"diagnostics": []}, {"diagnostics": {"otel": []}}):
+            with self.subTest(payload=payload), self.assertRaises(ConfigError):
+                apply_loopback_diagnostics(payload, endpoint="http://127.0.0.1:4318")
+
+    def test_atomic_write_creates_private_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            config = Path(tmpdir) / "node-config.json"
-            config.write_text(
-                '{"node_label":"mini-03","network":"lan","otlp_http_endpoint":"http://192.168.10.11:4318","openclaw_service_name":"openclaw_gateway"}',
-                encoding="utf-8",
+            path = Path(tmpdir) / "openclaw.json"
+            path.write_text('{"old":true}\n', encoding="utf-8")
+            loaded = load_openclaw_config(path)
+            backup = write_openclaw_config(
+                path,
+                {"new": True},
+                expected=loaded.revision,
+                backup=True,
             )
-            rc, out, err = self._run_print(["--config", str(config), "--token", "token-1"])
-            self.assertEqual(rc, 0)
-            self.assertEqual(err, "")
-            self.assertIn("OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.10.11:4318", out)
-            self.assertIn("OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf", out)
-            self.assertNotIn("display_name", out)
-            self.assertNotIn("node_label", out)
-            self.assertNotIn("host.name", out)
-
-            headers = self._parse_otlp_headers(out)
-            auth = base64.b64decode(headers["Authorization"].removeprefix("Basic ")).decode("utf-8")
-            self.assertEqual(auth, "mini_03:token-1")
-
-    def test_print_command_enforces_off_lan_headers(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = Path(tmpdir) / "node-config.json"
-            config.write_text(
-                '{"node_label":"mini-03","network":"off_lan","otlp_http_endpoint":"https://loki-ingest.example.com",'
-                '"openclaw_service_name":"openclaw_gateway"}',
-                encoding="utf-8",
-            )
-            rc, out, err = self._run_print(["--config", str(config), "--token", "token-1"])
-            self.assertEqual(rc, 1)
-            self.assertEqual(out, "")
-            self.assertIn("off-LAN", err)
-
-            rc, out, _ = self._run_print(
-                [
-                    "--config",
-                    str(config),
-                    "--token",
-                    "token-1",
-                    "--cf-access-client-id",
-                    "client-id.access",
-                    "--cf-access-client-secret",
-                    "client-secret",
-                ]
-            )
-            self.assertEqual(rc, 0)
-            headers = self._parse_otlp_headers(out)
-            self.assertEqual(headers["CF-Access-Client-Id"], "client-id.access")
-            self.assertEqual(headers["CF-Access-Client-Secret"], "client-secret")
-
-    def test_configure_command_updates_openclaw_json_with_backup(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            node_config = Path(tmpdir) / "node-config.json"
-            node_config.write_text(
-                '{"node_label":"mini-03","network":"lan","otlp_http_endpoint":"http://192.168.10.11:4318","openclaw_service_name":"openclaw_gateway"}',
-                encoding="utf-8",
-            )
-            openclaw_config = Path(tmpdir) / ".openclaw" / "openclaw.json"
-            openclaw_config.parent.mkdir(parents=True, exist_ok=True)
-            openclaw_config.write_text('{"diagnostics":{"otel":{"metrics":true}}}\n', encoding="utf-8")
-
-            rc, out, err = self._run_configure([
-                "--config",
-                str(node_config),
-                "--openclaw-config",
-                str(openclaw_config),
-                "--token",
-                "token-1",
-            ])
-            self.assertEqual(rc, 0)
-            self.assertEqual(err, "")
-            payload = json.loads(openclaw_config.read_text(encoding="utf-8"))
-            diagnostics = payload["diagnostics"]
-            otel = diagnostics["otel"]
-            self.assertTrue(diagnostics["enabled"])
-            self.assertTrue(otel["enabled"])
-            self.assertTrue(otel["logs"])
-            self.assertTrue(otel["captureContent"])
-            self.assertEqual(otel["protocol"], "http/protobuf")
-            self.assertEqual(otel["endpoint"], "http://192.168.10.11:4318")
-            self.assertEqual(otel["serviceName"], "openclaw_gateway")
-            self.assertIn("Authorization", otel["headers"])
-            decoded = base64.b64decode(otel["headers"]["Authorization"].removeprefix("Basic ")).decode("utf-8")
-            self.assertEqual(decoded, "mini_03:token-1")
-            self.assertIn("Backup:", out)
-
-            backup = next(openclaw_config.parent.glob("openclaw.json.bak-fleet-otel-*"), None)
             self.assertIsNotNone(backup)
-            self.assertEqual(stat.S_IMODE(openclaw_config.stat().st_mode), 0o600)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"new": True})
+            assert backup is not None
+            self.assertEqual(backup.read_text(encoding="utf-8"), '{"old":true}\n')
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
             self.assertEqual(stat.S_IMODE(backup.stat().st_mode), 0o600)
+            self.assertEqual(list(path.parent.glob(".openclaw.json.tmp-*")), [])
 
-    def test_configure_command_skips_backup_with_flag(self) -> None:
+    def test_load_reports_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            node_config = Path(tmpdir) / "node-config.json"
-            node_config.write_text(
-                '{"node_label":"mini-03","network":"lan","otlp_http_endpoint":"http://192.168.10.11:4318","openclaw_service_name":"openclaw_gateway"}',
-                encoding="utf-8",
-            )
-            openclaw_config = Path(tmpdir) / "openclaw.json"
-            openclaw_config.write_text("{}", encoding="utf-8")
+            path = Path(tmpdir) / "openclaw.json"
+            path.write_text("{bad", encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "contains invalid JSON"):
+                load_openclaw_config(path)
 
-            rc, out, err = self._run_configure(
-                [
-                    "--config",
-                    str(node_config),
-                    "--openclaw-config",
-                    str(openclaw_config),
-                    "--no-backup",
-                    "--token",
-                    "token-1",
-                ]
-            )
-            self.assertEqual(rc, 0)
-            self.assertEqual(err, "")
-            self.assertNotIn("Backup:", out)
-            backup_glob = list(openclaw_config.parent.glob("openclaw.json.bak-fleet-otel-*"))
-            self.assertEqual(backup_glob, [])
-
-    def test_configure_command_reports_invalid_openclaw_json_without_traceback(self) -> None:
+    def test_write_refuses_symlink_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            node_config = Path(tmpdir) / "node-config.json"
-            node_config.write_text(
-                '{"node_label":"mini-03","network":"lan","otlp_http_endpoint":"http://192.168.10.11:4318"}',
-                encoding="utf-8",
-            )
-            openclaw_config = Path(tmpdir) / "openclaw.json"
-            openclaw_config.write_text("{bad json", encoding="utf-8")
+            root = Path(tmpdir)
+            target = root / "outside.json"
+            target.write_text('{"preserve":true}\n', encoding="utf-8")
+            path = root / "openclaw.json"
+            path.symlink_to(target)
+            with self.assertRaisesRegex(ConfigError, "unable to read|not a symlink"):
+                load_openclaw_config(path)
+            self.assertEqual(target.read_text(encoding="utf-8"), '{"preserve":true}\n')
 
-            rc, out, err = self._run_configure(
-                [
-                    "--config",
-                    str(node_config),
-                    "--openclaw-config",
-                    str(openclaw_config),
-                    "--token",
-                    "token-1",
-                ]
-            )
+    def test_write_aborts_after_concurrent_replacement_or_edit(self) -> None:
+        for change in ("replace", "edit"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                path = root / "openclaw.json"
+                path.write_text('{"original":true}\n', encoding="utf-8")
+                loaded = load_openclaw_config(path)
+                if change == "replace":
+                    replacement = root / "replacement.json"
+                    replacement.write_text('{"concurrent":"replacement"}\n', encoding="utf-8")
+                    replacement.replace(path)
+                else:
+                    path.write_text('{"concurrent":"edit"}\n', encoding="utf-8")
 
-            self.assertEqual(rc, 1)
-            self.assertEqual(out, "")
-            self.assertIn("contains invalid JSON", err)
+                concurrent_content = path.read_text(encoding="utf-8")
+                with self.assertRaisesRegex(ConfigError, "changed after it was read"):
+                    write_openclaw_config(
+                        path,
+                        {"ours": True},
+                        expected=loaded.revision,
+                        backup=True,
+                    )
+                self.assertEqual(path.read_text(encoding="utf-8"), concurrent_content)
+                self.assertEqual(list(root.glob("*.bak-fleet-otel-*")), [])
 
-    def test_local_command_removes_central_headers_and_uses_loopback(self) -> None:
-        from contextlib import redirect_stderr, redirect_stdout
-        from io import StringIO
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            node_home = Path(tmpdir) / "node-home"
-            openclaw_config = node_home / ".openclaw" / "openclaw.json"
-            openclaw_config.parent.mkdir(parents=True)
-            openclaw_config.write_text(
-                '{"diagnostics":{"otel":{"headers":{"Authorization":"Basic old-secret"}}}}',
-                encoding="utf-8",
-            )
-            node_config = Path(tmpdir) / "agent.json"
-            node_config.write_text(
-                json.dumps(
-                    {
-                        "node_label": "mini_03",
-                        "node_user": "fleet-mini-03",
-                        "node_home": str(node_home),
-                        "telemetry_mode": "dual",
-                        "telemetry_endpoint": "https://telemetry.example.com",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            out = StringIO()
-            err = StringIO()
-            with redirect_stdout(out), redirect_stderr(err):
-                rc = local_main(["--config", str(node_config), "--no-backup"])
-
-            self.assertEqual(rc, 0, err.getvalue())
-            otel = json.loads(openclaw_config.read_text(encoding="utf-8"))["diagnostics"]["otel"]
-            self.assertEqual(otel["endpoint"], "http://127.0.0.1:4318")
-            self.assertEqual(otel["headers"], {})
-            self.assertNotIn("secret", openclaw_config.read_text(encoding="utf-8"))
+if __name__ == "__main__":
+    unittest.main()

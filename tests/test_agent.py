@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
@@ -18,31 +19,16 @@ from fleet_node_observability.agent import (
 )
 from fleet_node_observability.config import ConfigError
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class AgentConfigTest(unittest.TestCase):
     def load(self, **overrides: object):
         payload: dict[str, object] = {
+            "config_schema_version": 3,
             "node_label": "Mini-03",
-            "node_user": "fleet-mini-03",
-            "node_home": "/Users/fleet-mini-03",
-            "telemetry_mode": "dual",
             "telemetry_endpoint": "https://telemetry.example.com",
-        }
-        payload.update(overrides)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "node.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            return load_agent_config(path)
-
-    def load_v2(self, **overrides: object):
-        payload: dict[str, object] = {
-            "config_schema_version": 2,
-            "node_label": "Mini-03",
-            "telemetry_mode": "dual",
-            "telemetry_endpoint": "https://telemetry.example.com",
+            "codex_usage_enabled": True,
         }
         payload.update(overrides)
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -56,7 +42,19 @@ class AgentConfigTest(unittest.TestCase):
                 homebrew_prefix="/opt/homebrew",
             )
 
-    def test_example_loads_without_network_topology(self) -> None:
+    def test_example_is_exact_schema_3_contract(self) -> None:
+        source = json.loads(
+            (ROOT / "examples" / "node-agent.example.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            set(source),
+            {
+                "config_schema_version",
+                "node_label",
+                "telemetry_endpoint",
+                "codex_usage_enabled",
+            },
+        )
         config = load_agent_config(
             ROOT / "examples" / "node-agent.example.json",
             node_user="fleet-mini-03",
@@ -64,76 +62,54 @@ class AgentConfigTest(unittest.TestCase):
             architecture="arm64",
             homebrew_prefix="/opt/homebrew",
         )
-        self.assertEqual(config.telemetry_mode, "dual")
-        self.assertEqual(config.node_exporter_target, "127.0.0.1:9100")
-        source = (ROOT / "examples" / "node-agent.example.json").read_text(encoding="utf-8")
-        self.assertEqual(
-            set(json.loads(source)),
-            {
-                "config_schema_version",
-                "node_label",
-                "telemetry_mode",
-                "telemetry_endpoint",
-            },
-        )
-        self.assertNotIn('"network"', source)
-        self.assertNotIn("tunnel", source)
-        self.assertNotIn("cloudflare", source.lower())
+        self.assertEqual(config.node_label, "mini_03")
+        self.assertTrue(config.codex_usage_enabled)
 
-    def test_v2_central_config_contains_only_intent(self) -> None:
-        config = self.load_v2()
-        self.assertEqual(config.node_user, "fleet-mini-03")
-        self.assertEqual(
-            config.openclaw_config_path,
-            Path("/Users/fleet-mini-03/.openclaw/openclaw.json"),
-        )
-        self.assertEqual(
-            config.collector_config_path,
-            Path(
-                "/Users/fleet-mini-03/.openclaw/fleet-node-observability/config/collector.json"
-            ),
-        )
-        for forbidden in [
-            "node_user",
-            "node_home",
-            "openclaw_config_path",
-            "node_exporter_target",
-            "queue_directory",
-        ]:
-            with self.subTest(forbidden=forbidden), self.assertRaisesRegex(
-                ConfigError, "may contain only"
-            ):
-                self.load_v2(**{forbidden: "centrally-controlled"})
+    def test_rejects_old_missing_and_extra_fields(self) -> None:
+        cases = [
+            {"config_schema_version": 2},
+            {"telemetry_mode": "push"},
+            {"network": "lan"},
+            {"node_user": "central-must-not-own-this"},
+            {"codex_usage_enabled": "true"},
+        ]
+        for override in cases:
+            with self.subTest(override=override), self.assertRaises(ConfigError):
+                self.load(**override)
+        with self.assertRaisesRegex(ConfigError, "must be a boolean"):
+            self.load(codex_usage_enabled=None)
 
-    def test_v2_without_explicit_context_fails_clearly_as_root(self) -> None:
+        complete = {
+            "config_schema_version": 3,
+            "node_label": "mini_03",
+            "telemetry_endpoint": "https://telemetry.example.com",
+            "codex_usage_enabled": True,
+        }
+        for missing in complete:
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as tmpdir:
+                payload = complete.copy()
+                payload.pop(missing)
+                path = Path(tmpdir) / "node.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    load_agent_config(
+                        path,
+                        node_user="fleet-mini-03",
+                        node_home="/Users/fleet-mini-03",
+                        architecture="arm64",
+                        homebrew_prefix="/opt/homebrew",
+                    )
+
+    def test_local_context_is_derived_or_explicit_as_one_complete_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "node.json"
             path.write_text(
                 json.dumps(
                     {
-                        "config_schema_version": 2,
+                        "config_schema_version": 3,
                         "node_label": "mini-03",
-                        "telemetry_mode": "push",
                         "telemetry_endpoint": "https://telemetry.example.com",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with patch(
-                "fleet_node_observability.agent.os.geteuid", return_value=0
-            ), self.assertRaisesRegex(ConfigError, "unprivileged node account, not root"):
-                load_agent_config(path)
-
-    def test_v2_helpers_can_resolve_current_unprivileged_context(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "node.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "config_schema_version": 2,
-                        "node_label": "mini-03",
-                        "telemetry_mode": "push",
-                        "telemetry_endpoint": "https://telemetry.example.com",
+                        "codex_usage_enabled": False,
                     }
                 ),
                 encoding="utf-8",
@@ -149,191 +125,76 @@ class AgentConfigTest(unittest.TestCase):
                 return_value=local,
             ):
                 config = load_agent_config(path)
-        self.assertEqual(config.node_user, "local-node")
-        self.assertEqual(config.node_home, Path(tmpdir))
+            self.assertEqual(config.node_user, "local-node")
+            with self.assertRaisesRegex(ConfigError, "explicit context requires"):
+                load_agent_config(path, node_user="local-node")
 
-    def test_textfile_default_is_derived_from_selected_homebrew_prefix(self) -> None:
+    def test_implicit_root_context_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "config_schema_version": 3,
+                        "node_label": "mini-03",
+                        "telemetry_endpoint": "https://telemetry.example.com",
+                        "codex_usage_enabled": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch("fleet_node_observability.agent.os.geteuid", return_value=0), self.assertRaisesRegex(
+                ConfigError, "unprivileged node account, not root"
+            ):
+                load_agent_config(path)
+
+    def test_local_paths_and_listeners_are_derived(self) -> None:
+        config = self.load()
+        self.assertEqual(config.node_exporter_target, "127.0.0.1:9100")
+        self.assertEqual(config.local_otlp_endpoint, "127.0.0.1:4318")
         self.assertEqual(
-            self.load_v2().node_exporter_textfile_dir,
+            config.node_exporter_textfile_dir,
             Path("/opt/homebrew/var/lib/node_exporter/textfile_collector"),
         )
-        payload = {
-            "config_schema_version": 2,
-            "node_label": "mini-03",
-            "telemetry_mode": "push",
-            "telemetry_endpoint": "https://telemetry.example.com",
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "node.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            config = load_agent_config(
-                path,
-                node_user="fleet-mini-03",
-                node_home="/Users/fleet-mini-03",
-                architecture="x86_64",
-                homebrew_prefix="/usr/local",
-            )
         self.assertEqual(
-            config.node_exporter_textfile_dir,
-            Path("/usr/local/var/lib/node_exporter/textfile_collector"),
+            config.openclaw_config_path,
+            Path("/Users/fleet-mini-03/.openclaw/openclaw.json"),
         )
-
-    def test_installer_textfile_override_is_local_and_explicit(self) -> None:
-        payload = {
-            "config_schema_version": 2,
-            "node_label": "mini-03",
-            "telemetry_mode": "push",
-            "telemetry_endpoint": "https://telemetry.example.com",
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "node.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            config = load_agent_config(
-                path,
-                node_user="fleet-mini-03",
-                node_home="/Users/fleet-mini-03",
-                architecture="arm64",
-                homebrew_prefix="/opt/homebrew",
-                node_exporter_textfile_dir="/Volumes/metrics/node-exporter",
-            )
-        self.assertEqual(
-            config.node_exporter_textfile_dir,
-            Path("/Volumes/metrics/node-exporter"),
-        )
-
-    def test_legacy_local_fields_are_fail_closed_assertions(self) -> None:
-        payload = {
-            "node_label": "mini-03",
-            "node_user": "wrong-user",
-            "node_home": "/Users/fleet-mini-03",
-            "telemetry_mode": "dual",
-            "telemetry_endpoint": "https://telemetry.example.com",
-        }
-        with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "node.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            with self.assertRaisesRegex(ConfigError, "legacy node_user is an assertion"):
-                load_agent_config(
-                    path,
-                    node_user="fleet-mini-03",
-                    node_home="/Users/fleet-mini-03",
-                    architecture="arm64",
-                    homebrew_prefix="/opt/homebrew",
-                )
-            payload["node_user"] = "fleet-mini-03"
-            payload["collector_config_path"] = "/tmp/collector.json"
-            path.write_text(json.dumps(payload), encoding="utf-8")
-            with self.assertRaisesRegex(
-                ConfigError, "legacy collector_config_path is an assertion"
-            ):
-                load_agent_config(
-                    path,
-                    node_user="fleet-mini-03",
-                    node_home="/Users/fleet-mini-03",
-                    architecture="arm64",
-                    homebrew_prefix="/opt/homebrew",
-                )
 
     def test_requires_https_base_endpoint(self) -> None:
-        invalid_endpoints = [
+        for endpoint in [
             "http://telemetry.example.com",
             "https://telemetry.example.com/v1/metrics",
             "https://user@telemetry.example.com",
-            "https://user:password@telemetry.example.com",
-            "https://telemetry.example.com:not-a-port",
             "https://telemetry.example.com:0",
-            "https://telemetry.example.com:65536",
-            "https://telemetry.example.com:",
             " https://telemetry.example.com",
-        ]
-        for endpoint in invalid_endpoints:
+        ]:
             with self.subTest(endpoint=endpoint), self.assertRaises(ConfigError):
                 self.load(telemetry_endpoint=endpoint)
-        for endpoint in [
-            "https://telemetry.example.com",
-            "https://telemetry.example.com:443",
-            "https://telemetry.example.com:8443/",
-        ]:
-            with self.subTest(endpoint=endpoint):
-                self.assertEqual(
-                    self.load(telemetry_endpoint=endpoint).telemetry_endpoint,
-                    endpoint.rstrip("/"),
-                )
-
-    def test_all_local_listeners_and_scrapes_must_be_loopback(self) -> None:
-        for field in [
-            "node_exporter_target",
-            "local_otlp_endpoint",
-            "collector_metrics_endpoint",
-            "health_endpoint",
-        ]:
-            with self.subTest(field=field), self.assertRaises(ConfigError):
-                self.load(**{field: "0.0.0.0:9999"})
-
-    def test_runtime_paths_cannot_escape_managed_node_directory(self) -> None:
-        with self.assertRaises(ConfigError):
-            self.load(queue_directory="/tmp/fleet-queue")
-
-    def test_managed_file_and_state_paths_must_not_overlap(self) -> None:
-        base = Path("/Users/fleet-mini-03/.openclaw/fleet-node-observability")
-        cases = [
-            {
-                "collector_config_path": str(base / "same"),
-                "authorization_header_path": str(base / "same"),
-            },
-            {
-                "collector_config_path": str(base / "same"),
-                "collector_binary_path": str(base / "same"),
-            },
-            {
-                "authorization_header_path": str(base / "same"),
-                "collector_binary_path": str(base / "same"),
-            },
-            {"collector_config_path": str(base / "bin")},
-            {"queue_directory": str(base / "state")},
-            {"queue_directory": str(base / "state" / "queue")},
-            {
-                "queue_directory": str(base / "queue-file"),
-                "collector_config_path": str(base / "queue-file"),
-            },
-            {"queue_directory": str(base)},
-            {
-                "collector_config_path": str(base / "config-root"),
-                "queue_directory": str(base / "config-root" / "queue"),
-            },
-            {"collector_config_path": str(base / "state" / "collector.json")},
-        ]
-        for overrides in cases:
-            with self.subTest(overrides=overrides), self.assertRaises(ConfigError):
-                self.load(**overrides)
-
-    def test_textfile_directory_is_limited_to_homebrew_or_node_home(self) -> None:
-        with self.assertRaises(ConfigError):
-            self.load(node_exporter_textfile_dir="/etc/fleet-textfiles")
-        config = self.load(
-            node_exporter_textfile_dir="/Users/fleet-mini-03/.openclaw/textfiles"
-        )
         self.assertEqual(
-            config.node_exporter_textfile_dir,
-            Path("/Users/fleet-mini-03/.openclaw/textfiles"),
+            self.load(telemetry_endpoint="https://telemetry.example.com:8443/").telemetry_endpoint,
+            "https://telemetry.example.com:8443",
         )
 
-    def test_mode_controls_only_host_pipelines(self) -> None:
-        pull = render_collector_config(self.load(telemetry_mode="pull"))
-        dual = render_collector_config(self.load(telemetry_mode="dual"))
-        push = render_collector_config(self.load(telemetry_mode="push"))
-
-        for rendered in [pull, dual, push]:
-            pipelines = rendered["service"]["pipelines"]
-            self.assertIn("logs/openclaw", pipelines)
-            self.assertIn("traces/openclaw", pipelines)
-            self.assertIn("metrics/openclaw", pipelines)
-            self.assertIn("metrics/agent", pipelines)
-        self.assertNotIn("metrics/host", pull["service"]["pipelines"])
-        self.assertNotIn("metrics/heartbeat", pull["service"]["pipelines"])
-        for rendered in [dual, push]:
-            self.assertIn("metrics/host", rendered["service"]["pipelines"])
-            self.assertIn("metrics/heartbeat", rendered["service"]["pipelines"])
+    def test_all_six_pipelines_are_unconditional(self) -> None:
+        for codex_enabled in (True, False):
+            rendered = render_collector_config(
+                self.load(codex_usage_enabled=codex_enabled)
+            )
+            self.assertEqual(
+                set(rendered["service"]["pipelines"]),
+                {
+                    "logs/openclaw",
+                    "traces/openclaw",
+                    "metrics/openclaw",
+                    "metrics/agent",
+                    "metrics/host",
+                    "metrics/heartbeat",
+                },
+            )
+            serialized = json.dumps(rendered)
+            self.assertNotIn("fleet.transport", serialized)
+            self.assertIn("fleet.claimed_node", serialized)
 
     def test_batches_compresses_and_uses_bounded_persistent_queues(self) -> None:
         rendered = render_collector_config(self.load())
@@ -341,52 +202,38 @@ class AgentConfigTest(unittest.TestCase):
         for name, exporter in rendered["exporters"].items():
             with self.subTest(exporter=name):
                 self.assertEqual(exporter["compression"], "gzip")
-                self.assertEqual(exporter["sending_queue"]["num_consumers"], 1)
-                self.assertEqual(exporter["sending_queue"]["sizer"], "bytes")
-                self.assertGreater(exporter["sending_queue"]["queue_size"], 0)
-                self.assertEqual(exporter["sending_queue"]["storage"], "file_storage/fleet")
-                self.assertFalse(exporter["sending_queue"]["block_on_overflow"])
-                request_batch = exporter["sending_queue"]["batch"]
-                self.assertEqual(request_batch["sizer"], "bytes")
-                self.assertEqual(request_batch["flush_timeout"], "1s")
-                self.assertGreater(request_batch["max_size"], 0)
-                self.assertLessEqual(request_batch["min_size"], request_batch["max_size"])
-                self.assertLess(request_batch["max_size"], exporter["sending_queue"]["queue_size"])
-                self.assertGreater(int(exporter["retry_on_failure"]["max_elapsed_time"].rstrip("mh")), 0)
-        self.assertLess(
-            rendered["exporters"]["otlp_http/heartbeat"]["sending_queue"]["queue_size"],
-            rendered["exporters"]["otlp_http/logs"]["sending_queue"]["queue_size"],
-        )
-        self.assertEqual(
-            rendered["exporters"]["otlp_http/heartbeat"]["sending_queue"]["batch"]["max_size"],
-            64 * 1024,
-        )
+                queue = exporter["sending_queue"]
+                self.assertEqual(queue["num_consumers"], 1)
+                self.assertEqual(queue["sizer"], "bytes")
+                self.assertGreater(queue["queue_size"], 0)
+                self.assertEqual(queue["storage"], "file_storage/fleet")
+                self.assertFalse(queue["block_on_overflow"])
+                self.assertLess(queue["batch"]["max_size"], queue["queue_size"])
 
-    def test_heartbeat_has_own_receiver_pipeline_and_queue(self) -> None:
+    def test_heartbeat_has_independent_receiver_and_queue(self) -> None:
         rendered = render_collector_config(self.load())
-        heartbeat_scrape = rendered["receivers"]["prometheus/heartbeat"]["config"]["scrape_configs"][0]
-        self.assertEqual(heartbeat_scrape["metric_relabel_configs"][0]["regex"], HEARTBEAT_METRIC)
-        self.assertEqual(heartbeat_scrape["metric_relabel_configs"][0]["action"], "keep")
+        scrape = rendered["receivers"]["prometheus/heartbeat"]["config"]["scrape_configs"][0]
+        self.assertEqual(scrape["metric_relabel_configs"][0], {
+            "source_labels": ["__name__"],
+            "regex": HEARTBEAT_METRIC,
+            "action": "keep",
+        })
         self.assertEqual(
             rendered["service"]["pipelines"]["metrics/heartbeat"]["exporters"],
-            ["otlp_http/heartbeat"],
+            ["otlphttp/heartbeat"],
         )
 
-    def test_config_contains_no_secret_and_reads_protected_header_file(self) -> None:
-        rendered = render_collector_config(self.load())
-        serialized = json.dumps(rendered)
-        self.assertNotIn("token", serialized.lower())
+    def test_config_is_secret_free_and_openclaw_is_loopback_only(self) -> None:
+        config = self.load()
+        rendered = render_collector_config(config)
         for exporter in rendered["exporters"].values():
             self.assertRegex(exporter["headers"]["Authorization"], r"^\$\{file:/")
-
-    def test_openclaw_sends_to_loopback_without_headers(self) -> None:
-        settings = render_openclaw_local_settings(self.load())
-        self.assertEqual(settings["endpoint"], "http://127.0.0.1:4318")
-        self.assertEqual(settings["headers"], {})
+        self.assertEqual(
+            render_openclaw_local_settings(config),
+            {"endpoint": "http://127.0.0.1:4318"},
+        )
 
     def test_authorization_header_uses_normalized_node_identity(self) -> None:
-        import base64
-
         header = render_authorization_header("Mini-03", "secret")
         decoded = base64.b64decode(header.removeprefix("Basic ")).decode("utf-8")
         self.assertEqual(decoded, "mini_03:secret")

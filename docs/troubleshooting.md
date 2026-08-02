@@ -1,133 +1,51 @@
 # Troubleshooting
 
-The LAN/off-LAN, proxy, and Cloudflare Access checks below apply to the `0.1.x` compatibility paths.
+These checks inspect the final node-local runtime. Run them on the node during the later deployment
+or incident response; this code-cleanup task performs no host changes.
 
-## Unified agent checks (0.2.0)
+## Local sources
 
 ```bash
-launchctl print system/com.unblocklabs.fleet-node-agent
+curl -fsS http://127.0.0.1:9100/metrics | grep '^node_cpu_seconds_total'
+curl -fsS http://127.0.0.1:9100/metrics | grep '^fleet_node_agent_heartbeat_timestamp_seconds'
 curl -fsS http://127.0.0.1:13133/
-curl -fsS http://127.0.0.1:8888/metrics | grep -E 'otelcol_exporter_queue_(size|capacity)'
-curl -fsS http://127.0.0.1:9100/metrics | grep fleet_node_agent_heartbeat_timestamp_seconds
+curl -fsS http://127.0.0.1:8888/metrics | grep '^otelcol_exporter_'
 ```
 
-The Collector config and full Authorization header live below
-`~/.openclaw/fleet-node-observability/`; the header file and its directory must remain `0600` and
-`0700`. Do not print its contents. Collector errors are in that runtime's `logs/` directory.
-
-If a queue fills during an outage, inspect queue size/capacity, send-failure, and rejected-item
-metrics. One consumer per exporter deliberately limits replay concurrency after recovery. The
-heartbeat has a separate queue and five-minute retry age; a stale occurrence timestamp must alert
-even if an old queued heartbeat is delivered later.
-Use `fleet_node_agent_queue_oldest_age_seconds` to distinguish a continuously non-empty queue from
-a brief spike, and treat `fleet_node_agent_queue_metrics_available == 0` as loss of the local
-measurement rather than an empty queue.
-
-## Installation and launchctl issues
-
-### Command exits with permission denied
-
-- Confirm running with `sudo` for installer paths under `/Library` and LaunchDaemons.
-- Check file ownership (`root:wheel`) and executable bit on installed scripts.
-
-### Node-exporter is not exporting textfiles
+## Service state
 
 ```bash
-launchctl print gui/$(id -u)/com.unblocklabs.node-exporter
-launchctl print system/com.unblocklabs.node-exporter
-ls -l /opt/homebrew/var/lib/node_exporter/textfile_collector
+sudo launchctl print system/com.unblocklabs.node-exporter
+sudo launchctl print system/com.unblocklabs.fleet-node-agent
+sudo launchctl print system/com.unblocklabs.fleet-node-agent-heartbeat
+sudo launchctl print system/com.unblocklabs.openclaw-gateway-health-textfile
+sudo launchctl print system/com.unblocklabs.macos-thermal-textfile
 ```
 
-### Collector not running
+When `codex_usage_enabled` is true, also probe the capability-gated service:
 
 ```bash
-launchctl list | grep -E "node-exporter|fleet"
-launchctl print gui/$(id -u)/ | grep -i "collect"
+sudo launchctl print system/com.unblocklabs.codex-usage-textfile
 ```
 
-If a collector exits quickly, inspect launch log files and rerun collector script manually.
+The Codex service is intentionally absent when that schema-3 capability is false.
 
-## OTLP / OpenClaw config issues
+## Queue and export health
 
-### Unified OpenClaw configuration is not a receipt test
+Inspect the Collector self-metrics for queue size, capacity, rejected records, enqueue failures,
+send failures, and retry behavior. Compare them with
+`fleet_node_agent_queue_oldest_age_seconds`; a recent heartbeat does not prove that every outbound
+queue is draining.
 
-The current unified path uses the repository's atomic JSON writer and timestamped backup contract.
-Do not substitute a native `openclaw config` patch solely because the command exists in
-`v2026.4.29`; that version is only the command floor, not runtime/plugin compatibility proof. A
-future native patch must replace `diagnostics.otel.headers` as a whole with
-`--replace-path diagnostics.otel.headers` so stale central credentials cannot survive a merge.
+## OpenClaw
 
-After any approved configuration change:
+Inspect `~/.openclaw/openclaw.json` and confirm the OTLP endpoint is loopback, headers are `{}`,
+`traces`, `metrics`, and `logs` are true, `logsExporter` is `otlp`, and `captureContent` is false.
+Signal-specific endpoint overrides must be absent. Review the timestamped backup before restarting
+OpenClaw. Collector health does not prove that OpenClaw emitted or Charizard stored logs, metrics,
+and traces.
 
-1. Review the timestamped backup and resulting `diagnostics.otel` object without printing secrets.
-2. Confirm the approved `captureContent` value; prefer `false` until content capture is explicitly
-   accepted.
-3. Restart OpenClaw.
-4. Generate a known diagnostic event.
-5. Prove the expected signals were received by the local Collector and then stored by Charizard
-   under the authenticated node identity.
+## Secrets
 
-A healthy Collector endpoint, valid OpenClaw JSON, or successful config command is not sufficient
-evidence of telemetry receipt.
-
-### OTLP headers not applied
-
-- Verify source token:
-
-```bash
-printenv FLEET_INGEST_TOKEN
-```
-
-- Re-run print helper and inspect output:
-
-```bash
-FLEET_INGEST_TOKEN=... ./bin/print-otlp-env --config /tmp/node-config.lan.json
-```
-
-### off-LAN 403 from cloud endpoint
-
-- Ensure `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` are set, or pass
-  `--cf-access-client-id` and `--cf-access-client-secret`.
-- Confirm endpoint URL is HTTPS and matches central access policy.
-
-## Textfile scrape issues
-
-### `/metrics` returns 403
-
-- Revisit proxy token:
-
-```bash
-cat /Library/OpenClaw/fleet-node-exporter-scrape-token
-curl -fsS -H "X-Fleet-Scrape-Token: <token>" "http://127.0.0.1:19100/metrics"
-```
-
-### Missing metric families
-
-- Confirm collector schedule and config:
-
-```bash
-ls "$HOME/Library/LaunchAgents/com.unblocklabs.openclaw-gateway-health-textfile.plist" \
-  /Library/LaunchDaemons/com.unblocklabs.openclaw-gateway-health-textfile.plist 2>/dev/null
-grep -R "fleet_macos_thermal" -n /opt/homebrew/var/lib/node_exporter/textfile_collector
-```
-
-## Collector-specific checks
-
-- Codex usage:
-  - confirm `codex` is on the LaunchAgent `PATH` and starts `codex app-server`;
-  - run `collect-codex-usage --format prometheus` as the node user and inspect
-    `codex_collector_success` plus `error_type`;
-  - update Codex if `account/read` or `account/rateLimits/read` is unavailable.
-- macOS thermal:
-  - verify hardware support and permission state.
-- OpenClaw readiness:
-  - ensure OpenClaw is running and the ready endpoint responds.
-
-## Fast rollback
-
-- Keep last-known-good backups of:
-  - `~/.openclaw/openclaw.json`
-  - generated LaunchDaemon plist files
-  - `/Library/OpenClaw/fleet-node-exporter-scrape-token`
-
-Then restore and restart launch services to revert to the prior state.
+The schema-3 config and Collector JSON must not contain raw tokens. The authorization-header file
+must be mode `0600` inside the node-owned secrets directory. Do not print it during troubleshooting.
