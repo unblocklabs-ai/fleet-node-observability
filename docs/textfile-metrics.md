@@ -7,10 +7,10 @@ authenticated OTLP/HTTP connection.
 ## Always scheduled
 
 - `fleet_node_agent_heartbeat_timestamp_seconds{node}` records occurrence time every 30 seconds.
-- `fleet_node_agent_queue_metrics_available{node}` records whether Collector queue metrics were
-  readable.
-- `fleet_node_agent_queue_oldest_age_seconds{node,signal}` estimates continuous backlog age for the
-  six bounded signal queues.
+- `fleet_node_agent_queue_metrics_available{node}` records whether all six expected Collector queue
+  exporter samples are present and valid.
+- `fleet_node_agent_queue_oldest_age_seconds{node,signal}` reports seconds since a signal queue was
+  first observed non-empty without a subsequently observed valid zero.
 - `openclaw_gateway_ready{node,gateway_ready_url}` checks the loopback readiness endpoint every 60
   seconds.
 - macOS thermal metrics report pressure availability, level, collection success, collection time,

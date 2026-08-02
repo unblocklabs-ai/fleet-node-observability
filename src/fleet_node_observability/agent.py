@@ -33,6 +33,17 @@ COLLECTOR_RELEASES: dict[str, dict[str, str]] = {
 }
 
 HEARTBEAT_METRIC = "fleet_node_agent_heartbeat_timestamp_seconds"
+ROUTINE_LOG_DROP_CONDITIONS = (
+    'severity_number < SEVERITY_NUMBER_WARN and body == "openclaw.security.event" and '
+    'attributes["openclaw.security.action"] == "gateway.auth.succeeded" and '
+    'attributes["openclaw.security.outcome"] == "success" and '
+    'attributes["openclaw.security.policy.decision"] == "allow"',
+    'severity_number < SEVERITY_NUMBER_WARN and body == "log" and '
+    'attributes["openclaw.logger"] == "agents/tool-policy" and '
+    'attributes["openclaw.removedToolCount"] > 0 and '
+    '(attributes["openclaw.ruleKind"] == "allow" or '
+    'attributes["openclaw.ruleKind"] == "deny")',
+)
 CENTRAL_CONFIG_SCHEMA_VERSION = 3
 CENTRAL_CONFIG_KEYS = frozenset(
     {"config_schema_version", "node_label", "telemetry_endpoint", "codex_usage_enabled"}
@@ -394,11 +405,10 @@ def _validate_managed_path_relationships(
                 raise ConfigError(f"{directory_name} and {file_name} must not overlap")
 
 
-def _resource_processor(config: AgentConfig, source: str) -> dict[str, Any]:
+def _resource_processor(source: str) -> dict[str, Any]:
     return {
         "attributes": [
             {"key": "fleet.signal.source", "value": source, "action": "upsert"},
-            {"key": "fleet.claimed_node", "value": config.node_label, "action": "upsert"},
         ]
     }
 
@@ -447,7 +457,7 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
         },
         "prometheus/agent": {
             "config": {
-                "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
+                "global": {"scrape_interval": "30s", "scrape_timeout": "5s"},
                 "scrape_configs": [
                     {
                         "job_name": "fleet_node_agent",
@@ -464,8 +474,12 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
             "limit_mib": 96,
             "spike_limit_mib": 24,
         },
-        "resource/openclaw": _resource_processor(config, "openclaw"),
-        "resource/agent": _resource_processor(config, "node_agent_internal"),
+        "resource/openclaw": _resource_processor("openclaw"),
+        "resource/agent": _resource_processor("node_agent_internal"),
+        "filter/routine_openclaw_logs": {
+            "error_mode": "ignore",
+            "logs": {"log_record": list(ROUTINE_LOG_DROP_CONDITIONS)},
+        },
         "batch/logs": {"timeout": "1s", "send_batch_size": 512, "send_batch_max_size": 1024},
         "batch/traces": {"timeout": "1s", "send_batch_size": 512, "send_batch_max_size": 1024},
         "batch/app_metrics": {"timeout": "2s", "send_batch_size": 1000, "send_batch_max_size": 2000},
@@ -490,7 +504,12 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     pipelines: dict[str, Any] = {
         "logs/openclaw": {
             "receivers": ["otlp/openclaw"],
-            "processors": ["memory_limiter", "resource/openclaw", "batch/logs"],
+            "processors": [
+                "memory_limiter",
+                "resource/openclaw",
+                "filter/routine_openclaw_logs",
+                "batch/logs",
+            ],
             "exporters": ["otlphttp/logs"],
         },
         "traces/openclaw": {
@@ -512,38 +531,13 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
 
     receivers.update(
         {
-            "prometheus/host": {
+            "prometheus/node_exporter": {
                 "config": {
-                    "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
+                    "global": {"scrape_interval": "30s", "scrape_timeout": "5s"},
                     "scrape_configs": [
                         {
                             "job_name": "node_exporter_fleet",
                             "static_configs": [{"targets": [config.node_exporter_target]}],
-                            "metric_relabel_configs": [
-                                {
-                                    "source_labels": ["__name__"],
-                                    "regex": HEARTBEAT_METRIC,
-                                    "action": "drop",
-                                }
-                            ],
-                        }
-                    ],
-                }
-            },
-            "prometheus/heartbeat": {
-                "config": {
-                    "global": {"scrape_interval": "15s", "scrape_timeout": "5s"},
-                    "scrape_configs": [
-                        {
-                            "job_name": "fleet_node_agent_heartbeat",
-                            "static_configs": [{"targets": [config.node_exporter_target]}],
-                            "metric_relabel_configs": [
-                                {
-                                    "source_labels": ["__name__"],
-                                    "regex": HEARTBEAT_METRIC,
-                                    "action": "keep",
-                                }
-                            ],
                         }
                     ],
                 }
@@ -552,8 +546,16 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     )
     processors.update(
         {
-            "resource/host": _resource_processor(config, "node_agent_host"),
-            "resource/heartbeat": _resource_processor(config, "node_agent_heartbeat"),
+            "filter/host_metrics": {
+                "error_mode": "ignore",
+                "metrics": {"metric": [f'name == "{HEARTBEAT_METRIC}"']},
+            },
+            "filter/heartbeat": {
+                "error_mode": "ignore",
+                "metrics": {"metric": [f'name != "{HEARTBEAT_METRIC}"']},
+            },
+            "resource/host": _resource_processor("node_agent_host"),
+            "resource/heartbeat": _resource_processor("node_agent_heartbeat"),
             "batch/host": {"timeout": "3s", "send_batch_size": 1000, "send_batch_max_size": 2000},
             "batch/heartbeat": {"timeout": "1s", "send_batch_size": 10, "send_batch_max_size": 20},
         }
@@ -571,13 +573,23 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     pipelines.update(
         {
             "metrics/host": {
-                "receivers": ["prometheus/host"],
-                "processors": ["memory_limiter", "resource/host", "batch/host"],
+                "receivers": ["prometheus/node_exporter"],
+                "processors": [
+                    "memory_limiter",
+                    "filter/host_metrics",
+                    "resource/host",
+                    "batch/host",
+                ],
                 "exporters": ["otlphttp/host"],
             },
             "metrics/heartbeat": {
-                "receivers": ["prometheus/heartbeat"],
-                "processors": ["memory_limiter", "resource/heartbeat", "batch/heartbeat"],
+                "receivers": ["prometheus/node_exporter"],
+                "processors": [
+                    "memory_limiter",
+                    "filter/heartbeat",
+                    "resource/heartbeat",
+                    "batch/heartbeat",
+                ],
                 "exporters": ["otlphttp/heartbeat"],
             },
         }

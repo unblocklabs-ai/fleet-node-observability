@@ -370,7 +370,6 @@ def prometheus_output(payload: dict[str, Any]) -> str:
         "node": payload["node"],
         "profile": payload["profile"],
         "account_domain": payload["account_domain"],
-        "account_email": payload["account_email"],
         "plan_type": payload["plan_type"],
         "source": payload["source"],
     }

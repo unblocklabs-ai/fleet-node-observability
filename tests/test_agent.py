@@ -11,6 +11,7 @@ from fleet_node_observability.agent import (
     COLLECTOR_RELEASES,
     COLLECTOR_VERSION,
     HEARTBEAT_METRIC,
+    ROUTINE_LOG_DROP_CONDITIONS,
     LocalNodeContext,
     load_agent_config,
     render_authorization_header,
@@ -194,7 +195,45 @@ class AgentConfigTest(unittest.TestCase):
             )
             serialized = json.dumps(rendered)
             self.assertNotIn("fleet.transport", serialized)
-            self.assertIn("fleet.claimed_node", serialized)
+            self.assertNotIn("fleet.claimed_node", serialized)
+
+    def test_routine_log_filter_is_exact_and_cannot_drop_warn_or_higher(self) -> None:
+        rendered = render_collector_config(self.load())
+        routine_filter = rendered["processors"]["filter/routine_openclaw_logs"]
+        self.assertEqual(routine_filter["error_mode"], "ignore")
+        conditions = routine_filter["logs"]["log_record"]
+        self.assertEqual(conditions, list(ROUTINE_LOG_DROP_CONDITIONS))
+        self.assertEqual(len(conditions), 2)
+        self.assertTrue(
+            all(
+                condition.startswith("severity_number < SEVERITY_NUMBER_WARN and ")
+                for condition in conditions
+            )
+        )
+        self.assertFalse(any("IsMatch" in condition for condition in conditions))
+        self.assertEqual(
+            conditions[1],
+            'severity_number < SEVERITY_NUMBER_WARN and body == "log" and '
+            'attributes["openclaw.logger"] == "agents/tool-policy" and '
+            'attributes["openclaw.removedToolCount"] > 0 and '
+            '(attributes["openclaw.ruleKind"] == "allow" or '
+            'attributes["openclaw.ruleKind"] == "deny")',
+        )
+        serialized_conditions = "\n".join(conditions)
+        self.assertNotIn("user_task_output", serialized_conditions)
+        self.assertNotIn("STATUS:", serialized_conditions)
+        self.assertNotIn("slack-subagent-card", serialized_conditions)
+        self.assertNotIn("qmd", serialized_conditions)
+        self.assertNotIn("codex", serialized_conditions)
+        self.assertEqual(
+            rendered["service"]["pipelines"]["logs/openclaw"]["processors"],
+            [
+                "memory_limiter",
+                "resource/openclaw",
+                "filter/routine_openclaw_logs",
+                "batch/logs",
+            ],
+        )
 
     def test_batches_compresses_and_uses_bounded_persistent_queues(self) -> None:
         rendered = render_collector_config(self.load())
@@ -210,17 +249,38 @@ class AgentConfigTest(unittest.TestCase):
                 self.assertFalse(queue["block_on_overflow"])
                 self.assertLess(queue["batch"]["max_size"], queue["queue_size"])
 
-    def test_heartbeat_has_independent_receiver_and_queue(self) -> None:
+    def test_one_node_exporter_scrape_fans_out_to_filtered_independent_queues(self) -> None:
         rendered = render_collector_config(self.load())
-        scrape = rendered["receivers"]["prometheus/heartbeat"]["config"]["scrape_configs"][0]
-        self.assertEqual(scrape["metric_relabel_configs"][0], {
-            "source_labels": ["__name__"],
-            "regex": HEARTBEAT_METRIC,
-            "action": "keep",
-        })
+        prometheus_receivers = {
+            name for name in rendered["receivers"] if name.startswith("prometheus/")
+        }
         self.assertEqual(
-            rendered["service"]["pipelines"]["metrics/heartbeat"]["exporters"],
-            ["otlphttp/heartbeat"],
+            prometheus_receivers,
+            {"prometheus/agent", "prometheus/node_exporter"},
+        )
+        node_receiver = rendered["receivers"]["prometheus/node_exporter"]
+        self.assertEqual(node_receiver["config"]["global"]["scrape_interval"], "30s")
+        self.assertEqual(
+            rendered["receivers"]["prometheus/agent"]["config"]["global"][
+                "scrape_interval"
+            ],
+            "30s",
+        )
+        host = rendered["service"]["pipelines"]["metrics/host"]
+        heartbeat = rendered["service"]["pipelines"]["metrics/heartbeat"]
+        self.assertEqual(host["receivers"], ["prometheus/node_exporter"])
+        self.assertEqual(heartbeat["receivers"], ["prometheus/node_exporter"])
+        self.assertEqual(
+            rendered["processors"]["filter/host_metrics"]["metrics"]["metric"],
+            [f'name == "{HEARTBEAT_METRIC}"'],
+        )
+        self.assertEqual(
+            rendered["processors"]["filter/heartbeat"]["metrics"]["metric"],
+            [f'name != "{HEARTBEAT_METRIC}"'],
+        )
+        self.assertEqual(host["exporters"], ["otlphttp/host"])
+        self.assertEqual(
+            heartbeat["exporters"], ["otlphttp/heartbeat"]
         )
 
     def test_config_is_secret_free_and_openclaw_is_loopback_only(self) -> None:

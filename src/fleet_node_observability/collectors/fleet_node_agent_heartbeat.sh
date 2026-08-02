@@ -41,26 +41,86 @@ trap 'rm -f "$TMP"' EXIT
 TIMESTAMP="$(date +%s)"
 METRICS=""
 METRICS_AVAILABLE=0
-if METRICS="$(curl --fail --silent --show-error --max-time 2 "http://$COLLECTOR_METRICS_ENDPOINT/metrics" 2>/dev/null)"; then
-  METRICS_AVAILABLE=1
+if ! METRICS="$(curl --fail --silent --show-error --max-time 2 "http://$COLLECTOR_METRICS_ENDPOINT/metrics" 2>/dev/null)"; then
+  METRICS=""
 fi
 
-queue_size() {
-  local exporter="$1"
-  printf '%s\n' "$METRICS" | awk -v expected="$exporter" '
-    /^otelcol_exporter_queue_size\{/ && index($0, "exporter=\"" expected "\"") { total += $NF }
-    END { printf "%.0f\n", total + 0 }
-  '
-}
+QUEUE_LOGS=0
+QUEUE_TRACES=0
+QUEUE_OPENCLAW_METRICS=0
+QUEUE_AGENT_METRICS=0
+QUEUE_HOST_METRICS=0
+QUEUE_HEARTBEAT=0
+SEEN_LOGS=0
+SEEN_TRACES=0
+SEEN_OPENCLAW_METRICS=0
+SEEN_AGENT_METRICS=0
+SEEN_HOST_METRICS=0
+SEEN_HEARTBEAT=0
+if [[ -n "$METRICS" ]]; then
+  while IFS=$'\t' read -r signal queued; do
+    case "$signal" in
+      logs) QUEUE_LOGS="$queued"; SEEN_LOGS=1 ;;
+      traces) QUEUE_TRACES="$queued"; SEEN_TRACES=1 ;;
+      openclaw_metrics) QUEUE_OPENCLAW_METRICS="$queued"; SEEN_OPENCLAW_METRICS=1 ;;
+      agent_metrics) QUEUE_AGENT_METRICS="$queued"; SEEN_AGENT_METRICS=1 ;;
+      host_metrics) QUEUE_HOST_METRICS="$queued"; SEEN_HOST_METRICS=1 ;;
+      heartbeat) QUEUE_HEARTBEAT="$queued"; SEEN_HEARTBEAT=1 ;;
+    esac
+  done < <(
+    printf '%s\n' "$METRICS" | awk '
+      function valid_queue_size(value, number) {
+        if (value !~ /^([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$/) return 0
+        number = value + 0
+        return number >= 0 && number == int(number)
+      }
+      function emit_if_usable(exporter, signal) {
+        if (valid[exporter] && !invalid[exporter]) {
+          printf "%s\t%.0f\n", signal, total[exporter]
+        }
+      }
+      /^otelcol_exporter_queue_size\{/ {
+        exporter = ""
+        if (index($0, "exporter=\"otlphttp/logs\"")) exporter = "logs"
+        else if (index($0, "exporter=\"otlphttp/traces\"")) exporter = "traces"
+        else if (index($0, "exporter=\"otlphttp/app_metrics\"")) exporter = "app_metrics"
+        else if (index($0, "exporter=\"otlphttp/agent\"")) exporter = "agent"
+        else if (index($0, "exporter=\"otlphttp/host\"")) exporter = "host"
+        else if (index($0, "exporter=\"otlphttp/heartbeat\"")) exporter = "heartbeat"
+        if (exporter == "") next
+        value = $NF
+        if (!valid_queue_size(value)) {
+          invalid[exporter] = 1
+          next
+        }
+        valid[exporter] = 1
+        total[exporter] += value + 0
+      }
+      END {
+        emit_if_usable("logs", "logs")
+        emit_if_usable("traces", "traces")
+        emit_if_usable("app_metrics", "openclaw_metrics")
+        emit_if_usable("agent", "agent_metrics")
+        emit_if_usable("host", "host_metrics")
+        emit_if_usable("heartbeat", "heartbeat")
+      }
+    '
+  )
+fi
+if [[ "$SEEN_LOGS" -eq 1 && "$SEEN_TRACES" -eq 1 && "$SEEN_OPENCLAW_METRICS" -eq 1 &&
+      "$SEEN_AGENT_METRICS" -eq 1 && "$SEEN_HOST_METRICS" -eq 1 && "$SEEN_HEARTBEAT" -eq 1 ]]; then
+  METRICS_AVAILABLE=1
+else
+  METRICS_AVAILABLE=0
+fi
 
 queue_age() {
   local signal="$1"
-  local exporter="$2"
+  local queued="$2"
+  local seen="$3"
   local state_file="$STATE_DIR/queue-oldest-$signal.timestamp"
-  local queued=0
   local started=0
-  if [[ "$METRICS_AVAILABLE" -eq 1 ]]; then
-    queued="$(queue_size "$exporter")"
+  if [[ "$seen" -eq 1 ]]; then
     if [[ "$queued" -gt 0 ]]; then
       if [[ -f "$state_file" && ! -L "$state_file" ]]; then
         started="$(sed -n '1p' "$state_file")"
@@ -89,22 +149,24 @@ queue_age() {
   echo '# HELP fleet_node_agent_heartbeat_timestamp_seconds Unix time when the node agent heartbeat was generated.'
   echo '# TYPE fleet_node_agent_heartbeat_timestamp_seconds gauge'
   printf 'fleet_node_agent_heartbeat_timestamp_seconds{node="%s"} %s\n' "$NODE_LABEL" "$TIMESTAMP"
-  echo '# HELP fleet_node_agent_queue_metrics_available Whether the local Collector queue metrics endpoint was readable.'
+  echo '# HELP fleet_node_agent_queue_metrics_available Whether all six expected local Collector queue exporter samples are present and valid.'
   echo '# TYPE fleet_node_agent_queue_metrics_available gauge'
   printf 'fleet_node_agent_queue_metrics_available{node="%s"} %s\n' "$NODE_LABEL" "$METRICS_AVAILABLE"
-  echo '# HELP fleet_node_agent_queue_oldest_age_seconds Seconds since a signal queue was first continuously observed non-empty.'
+  echo '# HELP fleet_node_agent_queue_oldest_age_seconds Seconds since a signal queue was first observed non-empty without a subsequently observed valid zero.'
   echo '# TYPE fleet_node_agent_queue_oldest_age_seconds gauge'
   for mapping in \
-    'logs:otlphttp/logs' \
-    'traces:otlphttp/traces' \
-    'openclaw_metrics:otlphttp/app_metrics' \
-    'agent_metrics:otlphttp/agent' \
-    'host_metrics:otlphttp/host' \
-    'heartbeat:otlphttp/heartbeat'; do
+    "logs:$QUEUE_LOGS:$SEEN_LOGS" \
+    "traces:$QUEUE_TRACES:$SEEN_TRACES" \
+    "openclaw_metrics:$QUEUE_OPENCLAW_METRICS:$SEEN_OPENCLAW_METRICS" \
+    "agent_metrics:$QUEUE_AGENT_METRICS:$SEEN_AGENT_METRICS" \
+    "host_metrics:$QUEUE_HOST_METRICS:$SEEN_HOST_METRICS" \
+    "heartbeat:$QUEUE_HEARTBEAT:$SEEN_HEARTBEAT"; do
     signal="${mapping%%:*}"
-    exporter="${mapping#*:}"
+    remainder="${mapping#*:}"
+    queued="${remainder%%:*}"
+    seen="${remainder##*:}"
     printf 'fleet_node_agent_queue_oldest_age_seconds{node="%s",signal="%s"} %s\n' \
-      "$NODE_LABEL" "$signal" "$(queue_age "$signal" "$exporter")"
+      "$NODE_LABEL" "$signal" "$(queue_age "$signal" "$queued" "$seen")"
   done
 } >"$TMP"
 chmod 0644 "$TMP"

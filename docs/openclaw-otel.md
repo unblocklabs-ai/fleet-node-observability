@@ -14,6 +14,11 @@ The installer updates `~/.openclaw/openclaw.json` for its explicit node account.
 - makes a timestamped mode-`0600` backup when a prior file exists; and
 - writes mode-`0600` JSON atomically with file and directory fsync.
 
+Because `captureContent` is disabled, ordinary OpenClaw log bodies arrive as `log`. The Collector
+drops only two low-severity structured successes: successful gateway authentication and successful
+tool-policy removal. It uses no body-prefix filters. QMD and Codex source noise remains until upstream
+provides stable structured discriminators for capture-off telemetry.
+
 The central Authorization header exists only in the Collector's protected secret file. A stale
 Authorization value in OpenClaw is removed rather than merged.
 

@@ -249,10 +249,10 @@ for raw in sys.stdin:
         self.assertIn("codex_usage_secondary_resets_at_seconds", text)
         self.assertIn("codex_credits_balance", text)
         self.assertIn('account_domain="example.com"', text)
-        self.assertIn('account_email="bill@example.com"', text)
+        self.assertNotIn("account_email=", text)
         self.assertIn('source="app_server"', text)
 
-    def test_account_email_is_retained_by_decision(self) -> None:
+    def test_account_email_is_retained_in_json_but_not_metric_labels(self) -> None:
         payload = collector.build_output(
             node="bill",
             profile="default",
@@ -268,7 +268,8 @@ for raw in sys.stdin:
 
         text = collector.prometheus_output(payload)
         self.assertIn('account_domain="example.com"', text)
-        self.assertIn('account_email="Bill@Example.COM"', text)
+        self.assertNotIn("account_email=", text)
+        self.assertEqual(payload["account_email"], "Bill@Example.COM")
 
     def test_prometheus_textfile_write_is_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

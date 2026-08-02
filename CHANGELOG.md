@@ -5,6 +5,19 @@
 - Added one node installer and one exact schema-3 intent containing node label, canonical HTTPS
   telemetry endpoint, and Codex usage capability. Accounts, paths, architecture, package locations,
   and loopback settings are resolved locally.
+- Dropped only two low-severity structured routine-success log shapes before queueing or network
+  transfer: successful gateway authentication and successful tool-policy removal. Body-prefix
+  filtering is absent, so task output, status updates, near misses, WARN-or-higher records, and
+  failure variants remain intact. QMD and Codex source noise is deferred until upstream supplies
+  stable structured discriminators for capture-off telemetry.
+- Consolidated host and heartbeat collection onto one 30-second node_exporter scrape with filtered,
+  independently queued pipelines; reduced Collector self-scraping to 30 seconds and made queue
+  inspection a single metrics pass.
+- Removed the unused `fleet.claimed_node` resource attribute and the Codex account-email metric
+  label. Authenticated node identity remains authoritative; `account_domain` is a lower-cardinality
+  client claim.
+- Added a pinned-Collector runtime smoke test for log filtering and shared scrape routing, expanded
+  all-exporter queue-parser coverage, and documented the trusted single-user node-account boundary.
 - Pinned OpenTelemetry Collector Contrib 0.157.0 for Intel and Apple Silicon
   macOS, with SHA-256 verification and config validation before launch.
 - Routed OpenClaw through a loopback-only OTLP/HTTP receiver so the Collector is

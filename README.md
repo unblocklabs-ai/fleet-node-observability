@@ -70,6 +70,12 @@ The installer:
 OpenClaw content capture is disabled. Its OTLP headers are replaced with an empty object so stale
 central credentials cannot remain in `openclaw.json`.
 
+The supported node threat model is a dedicated, trusted single-user account. OpenClaw and the
+Collector intentionally share that UID: same-UID code can read the per-node Collector credential and
+can submit telemetry to the unauthenticated loopback OTLP receiver. A credential is independently
+revocable per node, which limits fleet-wide blast radius. Isolating the Collector under a dedicated
+service account is a possible future hardening step, not part of the current runtime contract.
+
 ## Backpressure
 
 Collector Contrib `0.157.0` is pinned by platform URL and SHA-256. All six pipelines are always
@@ -77,8 +83,17 @@ rendered: OpenClaw logs, traces, and metrics; host metrics; Collector self-metri
 They use gzip, finite retries, bounded persistent byte queues, one queue consumer, and capped request
 batches. Queue exhaustion drops the affected signal instead of blocking OpenClaw.
 
+Raw received logs are subject only to two low-severity structured routine-success filters before
+they enter the persistent queue or cross the network: successful gateway authentication and
+successful tool-policy removal. There are no body-prefix filters. WARN-or-higher records, status
+updates, task output, near misses, and failure variants are preserved. With `captureContent` disabled,
+QMD and Codex source noise remains until upstream provides stable structured discriminators.
+
 The heartbeat producer emits queue-metric availability and bounded per-signal oldest-backlog-age
 gauges so central alerts can distinguish current liveness from delayed replay.
+
+Authenticated node identity is authoritative. Lower-cardinality client fields such as
+`account_domain` remain claims and must not be treated as authenticated identity.
 
 ## Repository scope
 
@@ -101,6 +116,14 @@ python3 -m compileall -q src tests
 for script in bin/collect-* bin/install-* bin/openclaw-* packaging/*.sh \
   src/fleet_node_observability/collectors/*.sh \
   src/fleet_node_observability/installers/*.sh; do bash -n "$script"; done
+```
+
+The pinned Collector runtime smoke test is explicit because it requires Docker and the exact image
+digest to be present locally. It fails when either prerequisite is unavailable:
+
+```bash
+FLEET_RUN_COLLECTOR_INTEGRATION=1 PYTHONPATH=src \
+  python3 -m unittest tests.test_collector_runtime_integration
 ```
 
 Build release evidence outside the repository's existing `dist/` directory:
