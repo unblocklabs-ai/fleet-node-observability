@@ -90,7 +90,10 @@ Source files:
 
 Functionality to preserve:
 
-- Codex usage collection from OAuth, Codex CLI RPC, and JSONL fallback.
+- Codex usage collection through the supported `codex app-server`
+  `account/read` and `account/rateLimits/read` methods. The extracted direct
+  OAuth/private-backend and session-JSONL fallbacks were retired in `0.2.0` so
+  Codex remains the sole owner of its credentials and usage API contract.
 - Codex Prometheus textfile metric names:
   - `codex_collector_success`
   - `codex_usage_snapshot_age_seconds`
@@ -132,7 +135,6 @@ Functionality to preserve:
 
 Required adaptation:
 
-- Rename `fleet-observability-codex-usage-collector` user-agent if desired.
 - Keep metric names and labels stable unless the central dashboards are updated
   in the same compatibility window.
 

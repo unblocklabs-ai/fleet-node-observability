@@ -93,7 +93,10 @@ grep -R "fleet_macos_thermal" -n /opt/homebrew/var/lib/node_exporter/textfile_co
 ## Collector-specific checks
 
 - Codex usage:
-  - validate local JSONL files and token cache paths before collecting.
+  - confirm `codex` is on the LaunchAgent `PATH` and starts `codex app-server`;
+  - run `collect-codex-usage --format prometheus` as the node user and inspect
+    `codex_collector_success` plus `error_type`;
+  - update Codex if `account/read` or `account/rateLimits/read` is unavailable.
 - macOS thermal:
   - verify hardware support and permission state.
 - OpenClaw readiness:

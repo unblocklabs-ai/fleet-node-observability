@@ -68,6 +68,19 @@ class LanInstallerContractTest(unittest.TestCase):
         ]:
             self.assertIn(required, self.installer)
 
+    def test_lan_codex_launchagent_has_safe_homebrew_path(self) -> None:
+        codex_start = self.installer.index('if [[ "$CODEX_USAGE_ENABLED" == "1" ]]')
+        codex_end = self.installer.index("\nelse\n", codex_start)
+        codex_install = self.installer[codex_start:codex_end]
+        self.assertIn(
+            'PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
+            self.installer,
+        )
+        self.assertIn("<key>EnvironmentVariables</key>", codex_install)
+        self.assertIn("<key>PATH</key>", codex_install)
+        self.assertIn('<string>$(xml_escape "$PATH_VALUE")</string>', codex_install)
+        self.assertNotIn("${PATH", codex_install)
+
     def test_lan_installer_does_not_copy_to_legacy_isolated_bins(self) -> None:
         self.assertNotIn("$HOME/bin/collect-codex-usage", self.installer)
         self.assertNotIn("$HOME/bin/collect-macos-thermal", self.installer)

@@ -41,6 +41,13 @@ covered by the occurrence-timestamp heartbeat; gateway readiness retains its exi
 
 ## Codex usage
 
+The collector starts the installed `codex app-server` with a bounded timeout
+and reads only `account/read` and `account/rateLimits/read`. Codex owns login,
+token refresh, and its account API. This collector never reads or writes
+`auth.json`, calls private ChatGPT endpoints, or derives account state from
+session transcripts. The `source` label is therefore `app_server`; failures
+remain visible through `codex_collector_success=0` and a bounded `error_type`.
+
 Core metrics:
 
 - `codex_collector_success`

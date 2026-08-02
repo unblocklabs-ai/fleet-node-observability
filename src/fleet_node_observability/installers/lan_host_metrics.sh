@@ -380,6 +380,7 @@ fi
 
 BREW_PREFIX="$("$BREW_BIN" --prefix)"
 NODE_EXPORTER_BIN="$BREW_PREFIX/bin/node_exporter"
+PATH_VALUE="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 NODE_EXPORTER_LISTEN_ADDRESS=":$NODE_EXPORTER_PORT"
 if [[ -n "$NODE_EXPORTER_TUNNEL_HOSTNAME" ]]; then
@@ -483,6 +484,11 @@ if [[ "$CODEX_USAGE_ENABLED" == "1" ]]; then
   <integer>$CODEX_USAGE_INTERVAL_SECS</integer>
   <key>RunAtLoad</key>
   <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(xml_escape "$PATH_VALUE")</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>$(xml_escape "$HOME/Library/Logs/$CODEX_LABEL.out.log")</string>
   <key>StandardErrorPath</key>

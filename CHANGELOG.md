@@ -16,6 +16,10 @@
 - Moved the central credential into one protected full-Authorization-header
   file; OpenClaw configuration contains neither the credential nor Cloudflare
   Access headers.
+- Reduced Codex usage collection to the supported `codex app-server`
+  `account/read` and `account/rateLimits/read` methods. The collector no longer
+  reads or writes Codex OAuth files, calls a private ChatGPT endpoint, or
+  reconstructs account usage from session transcripts.
 - Kept the `0.1.x` LAN/off-LAN commands as documented rollback compatibility.
 
 ## 0.1.3 - 2026-07-07
