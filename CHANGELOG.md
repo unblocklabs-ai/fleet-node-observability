@@ -26,6 +26,12 @@
   `account/read` and `account/rateLimits/read` methods. The collector no longer
   reads or writes Codex OAuth files, calls a private ChatGPT endpoint, or
   reconstructs account usage from session transcripts.
+- Retained the hardened custom OpenClaw JSON writer after Phase 4 review found no evidence that the
+  available OpenClaw runtime and diagnostics-otel plugin pair are a compatible replacement. The
+  `v2026.4.29` floor establishes command availability only. A future native patch must explicitly
+  replace `diagnostics.otel.headers`, preserve or deliberately revise the timestamped-backup
+  contract, resolve `captureContent` privacy (recommended default: `false`), restart OpenClaw, and
+  prove actual OTLP receipt before delegation or cutover.
 - Kept the `0.1.x` LAN/off-LAN commands as documented rollback compatibility.
 
 ## 0.1.3 - 2026-07-07

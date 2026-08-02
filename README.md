@@ -15,14 +15,19 @@ belong in the central `fleet-observability` repository.
 The current `0.1.x` implementation preserves separate LAN and off-LAN install and transport paths
 for compatibility with production. Those paths are transitional technical debt.
 
+The `0.2.0` node runtime and schema-v2 contract are implemented locally, but Phase 4 stopped at the
+evidence boundary: there has been no canary install, OpenClaw restart, or proof that real OpenClaw
+logs, metrics, and traces traverse the local Collector and arrive at Charizard. Nothing in this
+repository is production-cut-over or approved for deletion of the `0.1.x` rollback paths.
+
 The `0.2.0` implementation gives every node the same contract:
 
 - one installer and one configuration shape;
 - one Charizard-issued, revocable node credential;
 - one canonical HTTPS OTLP/HTTP endpoint on Charizard, normally reached through Cloudflare Tunnel;
-- OpenClaw logs, metrics, and traces pushed to that endpoint; and
-- a node-local collector that scrapes local `node_exporter` and textfile metrics and pushes them over
-  the same OTLP path.
+- OpenClaw logs, metrics, and traces sent to the loopback node agent; and
+- one node agent that forwards those signals, locally scraped host metrics, self-metrics, and
+  heartbeat through the authenticated Charizard endpoint.
 
 Charizard will not scrape nodes in the target model. Nodes will not expose a fleet monitoring port,
 run a per-node exporter tunnel, or choose behavior from `lan` versus `off_lan`. A future local route
@@ -62,6 +67,23 @@ node_exporter, and heartbeat, and then rewrites OpenClaw to loopback OTLP with a
 It never accepts a token in argv or the environment. Review the backup and restart OpenClaw after
 installation.
 
+The OpenClaw rewrite still uses this repository's hardened JSON writer: it validates object shape,
+creates a timestamped mode-`0600` pre-edit backup by default, writes atomically with fsync, sends
+OpenClaw only to loopback, and replaces `diagnostics.otel.headers` with an empty object so the
+central credential remains Collector-only. Keep that writer for the current pre-cutover runtime.
+The available native `openclaw config` command is not yet a proven replacement: OpenClaw
+`v2026.4.29` is only the known command-feature floor, not evidence that the installed runtime and
+diagnostics-otel plugin pair emit compatible telemetry. A future native patch must use
+`--replace-path diagnostics.otel.headers`; merge semantics must not leave stale central headers.
+Its backup behavior must also be reconciled with the current timestamped-backup contract.
+
+Current code sets `diagnostics.otel.captureContent=true`. Whether message/tool content may be
+captured is an unresolved privacy decision; the recommended default is `false` before fleet
+delegation unless the owner explicitly accepts content capture. Do not change writers or delegate
+the rollout until the chosen setting is documented and tested. The release gate also requires an
+OpenClaw restart followed by proof of actual OTLP receipt, not merely valid JSON or a healthy local
+Collector.
+
 The installer proves that `--node-user` is an unprivileged local account, obtains its real home
 from macOS directory services, detects the local architecture, derives the OpenClaw and package
 paths, and freezes that complete resolved config before making changes.
@@ -82,6 +104,11 @@ as the intended unprivileged node account. They derive that account's directory-
 architecture, and selected supported Homebrew prefix. They fail clearly under root; root automation
 must use the unified installer so account context remains explicit.
 
+Codex usage collection has one supported data path: the installed `codex app-server` methods
+`account/read` and `account/rateLimits/read`, under a bounded timeout. Codex alone owns login and
+token refresh. Node code does not read or write Codex OAuth files, call private ChatGPT endpoints,
+or reconstruct usage from session transcripts.
+
 `telemetry_mode` is rollout state, not network location:
 
 - `pull`: OpenClaw uses the local agent; the preserved legacy host-metric service is restored and
@@ -101,12 +128,14 @@ saved rollback copy.
 
 ### Backpressure contract
 
-The Collector uses a 96 MiB memory limit, gzip, finite exponential retries, and six disk-backed
-queues capped at about 248 MiB total: logs 96 MiB, traces 48 MiB, OpenClaw metrics 32 MiB, host
-metrics 48 MiB, agent self-metrics 16 MiB, and heartbeat 8 MiB. Each queue has one consumer to cap
-replay concurrency. This is a bounded drain, not a precise requests-per-second limiter. When a queue
-or retry age is exhausted, the affected low-priority telemetry is dropped instead of blocking
-OpenClaw; queue capacity/size and rejection metrics are exported by the agent itself.
+The Collector uses a 96 MiB memory limit, gzip, and finite exponential retries. In `pull`, its four
+base disk-backed queues total about 192 MiB: logs 96 MiB, traces 48 MiB, OpenClaw metrics 32 MiB,
+and agent self-metrics 16 MiB. In `dual` and `push`, host metrics add 48 MiB and heartbeat adds
+8 MiB, producing six queues totaling about 248 MiB. Each queue has one consumer to cap replay
+concurrency. This is a bounded drain, not a precise requests-per-second limiter. When capacity or
+retry age is exhausted, the affected signal is dropped instead of blocking OpenClaw; this can
+include OpenClaw logs and traces. Queue capacity/size and rejection metrics are exported by the
+agent itself.
 Queue-side batching caps serialized outbound requests at 1 MiB for logs/traces, 512 KiB for
 OpenClaw/host metrics, 256 KiB for agent metrics, and 64 KiB for heartbeat, with a one-second flush.
 The heartbeat textfile also emits a bounded per-signal
@@ -120,7 +149,7 @@ This repo should contain:
 - node_exporter installation and verification scripts
 - macOS LaunchDaemon or LaunchAgent installers for node-local collectors
 - OpenClaw OTLP environment/config helpers
-- the unified node-local metrics-to-OTLP collector and installer after the next refactor
+- the unified node-local metrics-to-OTLP collector and installer during pre-cutover validation
 - transitional LAN/off-LAN compatibility helpers until the push cutover is complete
 - legacy shipper cleanup helpers
 - node-local collectors for OpenClaw readiness, Codex usage, thermal pressure,

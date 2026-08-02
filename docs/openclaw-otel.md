@@ -16,7 +16,46 @@ When `configure-openclaw-local-otel` is used directly with schema 2, it derives 
 unprivileged account's real home and fails under root. Root provisioning must go through
 `install-fleet-node-agent --node-user <account>`.
 
-## Goal
+## Current writer and evidence stop
+
+The retained, locally tested config-mutation path is the repository-owned writer used by
+`configure-openclaw-local-otel`. It still hardcodes `captureContent=true`; if the owner selects the
+recommended `false`, the writer and its tests must change before any canary. It:
+
+- rejects non-object `diagnostics` and `diagnostics.otel` values;
+- preserves unrelated OpenClaw settings;
+- creates a timestamped, mode-`0600` pre-edit backup unless explicitly disabled;
+- writes the replacement JSON atomically, fsyncs it, and leaves mode `0600`;
+- points OpenClaw at the loopback Collector; and
+- replaces `diagnostics.otel.headers` with `{}`, keeping the Charizard credential only in the
+  Collector's protected authorization-header file.
+
+Phase 4 did not prove that a native `openclaw config` patch is equivalent. Keep the custom writer
+until all of these gaps are closed:
+
+- A compatible OpenClaw runtime and diagnostics-otel plugin pair is identified and exercised.
+  `v2026.4.29` is only the floor for the required config command; it does not prove that telemetry
+  is emitted by the runtime/plugin pair.
+- A native patch uses `--replace-path diagnostics.otel.headers`. An ordinary merge is insufficient
+  because it may retain a stale Authorization or Cloudflare header.
+- Native backup behavior is proved equivalent to the existing timestamped pre-edit mode-`0600`
+  backup, or a reviewed replacement/rollback contract is adopted explicitly.
+- `diagnostics.otel.captureContent` receives an owner-approved privacy decision. Current behavior is
+  `true`; the recommended pre-delegation default is `false` because captured content can include
+  message or tool payloads.
+- OpenClaw is restarted after the change, a diagnostic event is generated, and actual logs,
+  metrics, and traces are observed through the local Collector and at authenticated Charizard
+  storage. Config acceptance and Collector health alone are not receipt evidence.
+
+This is a release and delegation gate. It does not authorize a runtime change in this phase.
+
+## Unified `0.2.0` target
+
+OpenClaw sends OTLP/HTTP to the node-local Collector on `127.0.0.1:4318` with no central headers.
+The Collector alone reads the protected Charizard Authorization header and owns the outbound HTTPS
+connection. Physical LAN/off-LAN location does not change this protocol or credential boundary.
+
+## `0.1.x` compatibility goal
 
 All fleet nodes should send OpenClaw diagnostics to a configured OTLP endpoint
 using a deterministic auth shape:
@@ -28,7 +67,7 @@ using a deterministic auth shape:
   - `CF-Access-Client-Secret` for off-LAN nodes
 - optional Cloudflare Access headers in off-LAN mode.
 
-## Command patterns
+## `0.1.x` compatibility commands
 
 Generate environment variables only:
 
@@ -66,7 +105,7 @@ export FLEET_INGEST_TOKEN="TOKEN"
   --cf-access-client-secret "$CF_ACCESS_CLIENT_SECRET"
 ```
 
-## Expected generated config shape
+## Current compatibility config shape
 
 - `~/.openclaw/openclaw.json` backup is created first (timestamped file).
 - Diagnostics keys are enabled:
@@ -77,6 +116,9 @@ export FLEET_INGEST_TOKEN="TOKEN"
   - `diagnostics.otel.captureContent=true`
   - `diagnostics.otel.headers.Authorization=<basic>`
 - Existing unrelated OpenClaw settings are preserved.
+
+The `captureContent=true` line above records current behavior, not the recommended target. Resolve
+the privacy decision and prefer `false` before delegating or installing `0.2.0` on fleet nodes.
 
 ## Compatibility rules
 

@@ -32,6 +32,12 @@ The table captures the expected minimum central stack behavior.
 by this worktree. The central and node repositories must be released and staged together after the
 pre-cutover gate passes.
 
+OpenClaw `v2026.4.29` is only the minimum known config-command floor; it is not the minimum proven
+telemetry runtime/plugin version. The release remains blocked on an explicit `captureContent`
+privacy decision (recommended `false`), preservation or reviewed replacement of the timestamped
+backup contract, whole-path replacement of `diagnostics.otel.headers`, an OpenClaw restart, and
+actual OTLP receipt evidence. Until then, keep the repository's current hardened writer.
+
 During the transition, the unified installer also accepts unversioned rich config. Local account,
 home, path, and loopback fields are compatibility assertions and must match values derived on the
 node. Schema 2 intentionally rejects those fields.

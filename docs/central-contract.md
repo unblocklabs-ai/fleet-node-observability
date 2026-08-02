@@ -84,6 +84,15 @@ Direct helper use with schema 2 resolves the current unprivileged account, its r
 architecture, and supported Homebrew prefix. It must fail under root rather than derive root-owned
 runtime paths; root provisioning uses the installer with explicit context.
 
+The current unified installer uses the node repository's hardened OpenClaw JSON writer. It points
+OpenClaw at loopback, replaces the complete header object with `{}`, and keeps the central
+authorization header in the node Collector's mode-`0600` secret file. A native OpenClaw config
+command is not yet part of this contract: `v2026.4.29` proves the command floor only, not a compatible
+runtime/diagnostics-otel plugin pair. Any future native patch must use
+`--replace-path diagnostics.otel.headers`, reconcile the existing timestamped-backup guarantee,
+resolve the current `captureContent=true` privacy behavior (recommended target: `false`), restart
+OpenClaw, and prove actual OTLP receipt through Charizard before adoption.
+
 ## Current Compatibility Surface
 
 The `0.1.x` release still supports direct LAN node_exporter scraping, off-LAN per-node tunnels and

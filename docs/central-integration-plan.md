@@ -4,14 +4,20 @@ This plan moves the node package and Charizard from topology-specific push/pull 
 outbound OTLP/HTTP contract. The `0.2.0` implementation and central schema-v2 shadow path are ready
 locally; publication, canary installation, Cloudflare changes, and production cutover are not.
 
+Phase 4 review stopped before runtime mutation. The retained, locally tested OpenClaw JSON writer
+still hardcodes `captureContent=true`; if the owner selects the recommended `false`, the writer and
+its tests must change before any canary. Native delegation also requires a compatible OpenClaw
+runtime/diagnostics-otel plugin pair, exact header replacement, accepted backup semantics, restart,
+and real OTLP receipt. OpenClaw `v2026.4.29` is a config-command floor only.
+
 ## Target
 
 - Charizard exposes one canonical HTTPS OTLP/HTTP endpoint through Cloudflare Tunnel.
 - Charizard registers each node and returns one independently revocable ingest credential.
 - Every node installs the same runtime and configuration regardless of physical location.
-- OpenClaw pushes logs, metrics, and traces directly.
-- A node-local collector scrapes `127.0.0.1` node_exporter and its textfile metrics, then pushes them
-  through the same authenticated OTLP pipeline.
+- OpenClaw sends logs, metrics, and traces to the loopback node agent.
+- The node agent forwards those signals, locally scraped `127.0.0.1` node_exporter/textfile
+  metrics, self-metrics, and heartbeat through the one authenticated Charizard endpoint.
 - Charizard derives trusted node identity from authentication and never scrapes a fleet node.
 - A local Charizard route, if later required, changes only DNS or endpoint routing. It does not
   introduce a LAN mode in node code.
@@ -58,13 +64,20 @@ locally; publication, canary installation, Cloudflare changes, and production cu
 
 Use at least one LAN node and one currently remote node, including Theo:
 
-1. Run the existing central Prometheus pull and the new node-side OTLP push simultaneously.
-2. Write pushed canary series to distinguishable jobs or labels during comparison.
-3. Compare metric families, label sets, values, timestamps, staleness, collector errors, and
+1. Resolve `diagnostics.otel.captureContent`; use `false` by default unless content capture receives
+   explicit privacy approval.
+2. Keep the custom writer unless a pinned runtime/plugin pair proves native config and telemetry.
+   Any native patch must include `--replace-path diagnostics.otel.headers` and an accepted backup
+   contract.
+3. Install on a canary, restart OpenClaw, generate each expected signal, and prove actual receipt
+   through the local Collector and authenticated Charizard storage.
+4. Run the existing central Prometheus pull and the new node-side OTLP push simultaneously.
+5. Write pushed canary series to distinguishable jobs or labels during comparison.
+6. Compare metric families, label sets, values, timestamps, staleness, collector errors, and
    resource consumption.
-4. Exercise token rotation/revocation, node restart, temporary network loss, Charizard restart, and
+7. Exercise token rotation/revocation, node restart, temporary network loss, Charizard restart, and
    Cloudflare/Internet interruption.
-5. Require existing dashboards and alerts to produce equivalent results before cutover.
+8. Require existing dashboards and alerts to produce equivalent results before cutover.
 
 ## Phase 5: cut over and retire compatibility paths
 
@@ -75,6 +88,11 @@ Use at least one LAN node and one currently remote node, including Theo:
 - Close unnecessary node monitoring listeners and direct Charizard LAN ingest exposure after the
   rollback window is accepted.
 - Retain one bounded rollback release and document the end date for its compatibility paths.
+
+Deletion is gated on accepted dual-run evidence and rollback evidence. Until then, retain the
+topology-specific installers, legacy scrape proxy/service, per-node tunnel and scrape-token
+artifacts, and the saved pre-agent LaunchDaemon or LaunchAgent. `--retire-legacy-pull` remains an
+explicit push-only operator action; it is not an automatic install side effect.
 
 ## Acceptance criteria
 

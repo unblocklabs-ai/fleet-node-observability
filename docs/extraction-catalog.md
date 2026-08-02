@@ -140,6 +140,13 @@ Required adaptation:
 
 ### OpenClaw OTLP Configuration Helpers
 
+Status: this section records the extracted `0.1.x` compatibility behavior. The unified `0.2.0`
+writer instead points OpenClaw at loopback and replaces headers with `{}`; the Collector owns the
+central secret. Phase 4 retained the hardened custom writer because native command backup semantics
+and a compatible runtime/diagnostics-otel plugin pair remain unproved. `v2026.4.29` is only the
+config-command floor. Before delegation, resolve `captureContent` (recommended `false`), require
+whole-path header replacement, restart OpenClaw, and prove actual OTLP receipt.
+
 Source files:
 
 - `scripts/configure-openclaw-otel.py`
@@ -295,6 +302,8 @@ Move/recreate these test areas:
   client-side resource attributes.
 - OpenClaw config writer sets `diagnostics.enabled`, `diagnostics.otel.enabled`,
   `logs`, `captureContent`, `protocol`, `endpoint`, `serviceName`, and headers.
+- `captureContent=true` is retained behavior, not the approved future default; its privacy decision
+  is still open and `false` is recommended before delegation.
 - off-LAN OTLP helpers require and emit Cloudflare Access headers.
 - OTLP header values are percent-encoded.
 

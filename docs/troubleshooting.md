@@ -49,6 +49,27 @@ If a collector exits quickly, inspect launch log files and rerun collector scrip
 
 ## OTLP / OpenClaw config issues
 
+### Unified OpenClaw configuration is not a receipt test
+
+The current unified path uses the repository's atomic JSON writer and timestamped backup contract.
+Do not substitute a native `openclaw config` patch solely because the command exists in
+`v2026.4.29`; that version is only the command floor, not runtime/plugin compatibility proof. A
+future native patch must replace `diagnostics.otel.headers` as a whole with
+`--replace-path diagnostics.otel.headers` so stale central credentials cannot survive a merge.
+
+After any approved configuration change:
+
+1. Review the timestamped backup and resulting `diagnostics.otel` object without printing secrets.
+2. Confirm the approved `captureContent` value; prefer `false` until content capture is explicitly
+   accepted.
+3. Restart OpenClaw.
+4. Generate a known diagnostic event.
+5. Prove the expected signals were received by the local Collector and then stored by Charizard
+   under the authenticated node identity.
+
+A healthy Collector endpoint, valid OpenClaw JSON, or successful config command is not sufficient
+evidence of telemetry receipt.
+
 ### OTLP headers not applied
 
 - Verify source token:

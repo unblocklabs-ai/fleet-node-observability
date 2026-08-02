@@ -24,10 +24,12 @@ The same producer reads the Collector's loopback self-metrics and emits:
 - `fleet_node_agent_queue_metrics_available{node}`
 - `fleet_node_agent_queue_oldest_age_seconds{node,signal}`
 
-The `signal` label is restricted to six configured pipelines. Age starts when a queue is first
-continuously observed non-empty, survives a Collector restart in a protected local state file, and
-resets only after that queue is observed empty. This is an operational backlog-age estimate, not an
-exact age for every record.
+The producer is active only in `dual` and `push`, where `signal` is restricted to six known pipeline
+names. Pull mode configures only four queues and removes the heartbeat producer, so it does not emit
+these heartbeat or queue-age textfiles. Age starts when a queue is first continuously observed
+non-empty, survives a Collector restart in a protected local state file, and resets only after that
+queue is observed empty. This is an operational backlog-age estimate, not an exact age for every
+record.
 
 ## OpenClaw gateway
 
