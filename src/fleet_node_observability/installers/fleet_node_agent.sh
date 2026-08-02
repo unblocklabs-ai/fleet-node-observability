@@ -767,4 +767,8 @@ echo "[fleet-node-agent] installed node=$NODE_LABEL mode=$TELEMETRY_MODE"
 echo "[fleet-node-agent] OpenClaw OTLP: http://$LOCAL_OTLP_ENDPOINT"
 echo "[fleet-node-agent] central OTLP: $TELEMETRY_ENDPOINT"
 echo "[fleet-node-agent] health: $HEALTH_URL"
-echo "[fleet-node-agent] restart OpenClaw after reviewing its timestamped config backup"
+if [[ "$SKIP_OPENCLAW_CONFIG" -eq 0 ]]; then
+  echo "[fleet-node-agent] restart OpenClaw after reviewing the resulting config and any timestamped backup"
+else
+  echo "[fleet-node-agent] OpenClaw config update skipped; configure and restart OpenClaw before telemetry validation"
+fi

@@ -271,6 +271,20 @@ class AgentInstallerContractTest(unittest.TestCase):
         self.assertLess(health_index, openclaw_index)
         self.assertLess(exporter_index, openclaw_index)
 
+    def test_completion_message_does_not_claim_a_backup_always_exists(self) -> None:
+        self.assertIn(
+            "restart OpenClaw after reviewing the resulting config and any timestamped backup",
+            self.installer,
+        )
+        self.assertIn(
+            "OpenClaw config update skipped; configure and restart OpenClaw before telemetry validation",
+            self.installer,
+        )
+        self.assertNotIn(
+            "restart OpenClaw after reviewing its timestamped config backup",
+            self.installer,
+        )
+
     def test_large_node_exporter_response_is_fetched_once_before_checks(self) -> None:
         function_start = self.installer.index("verify_node_exporter_metrics() {")
         function_end = self.installer.index("\n}\n", function_start) + len("\n}\n")
