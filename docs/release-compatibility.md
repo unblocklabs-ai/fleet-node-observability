@@ -66,4 +66,7 @@ Each release tarball should include:
 - `bin/*`
 - `src/fleet_node_observability/*`
 
-Artifacts are version-named and should be deterministic to support offline rollout.
+Artifacts are version-named and receive a SHA-256 sidecar for integrity checks. The current builder
+does not normalize archive ordering, ownership, or timestamps, so it does not yet produce
+byte-for-byte reproducible tarballs; do not treat two independently built checksums as equivalent
+release provenance.

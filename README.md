@@ -36,10 +36,12 @@ node runtime.
 
 See [`docs/central-integration-plan.md`](docs/central-integration-plan.md) for the migration plan.
 
-The agent is OpenTelemetry Collector Contrib `0.157.0`, pinned by platform URL and SHA-256. It is
-the only node process that contacts Charizard. OpenClaw sends OTLP/HTTP to `127.0.0.1:4318`; the
-agent scrapes local node_exporter and Collector self-metrics, then batches, gzips, persists, retries,
-and exports each signal through the same authenticated HTTPS base endpoint.
+The implemented unified agent is OpenTelemetry Collector Contrib `0.157.0`, pinned by platform URL
+and SHA-256. Its rendered configuration makes it the only node process that owns central telemetry
+requests: OpenClaw sends OTLP/HTTP to `127.0.0.1:4318`, and the agent scrapes local node_exporter and
+Collector self-metrics, then batches, gzips, persists, retries, and exports each signal through the
+same authenticated HTTPS base endpoint. The Phase 4 receipt gate above is still required before
+treating that locally validated configuration as proven production behavior.
 
 Central state renders the versioned, secret-free intent file shown in
 `examples/node-agent.example.json`. Its only fields are `config_schema_version`, `node_label`,
@@ -62,15 +64,16 @@ installer selects and verifies the Homebrew installation that owns (or will inst
 `--node-exporter-textfile-dir` override only when node_exporter is intentionally configured with a
 different directory.
 
-The installer validates the pinned Collector config, starts the LaunchDaemons, proves local health,
-node_exporter, and heartbeat, and then rewrites OpenClaw to loopback OTLP with a timestamped backup.
-It never accepts a token in argv or the environment. Review the backup and restart OpenClaw after
-installation.
+The installer validates the pinned Collector config and proves the Collector's local health. In
+`dual` and `push`, it also proves the node_exporter scrape and a fresh heartbeat before rewriting
+OpenClaw to loopback OTLP, after creating a timestamped backup of any existing config. It never
+accepts a token in argv or the environment. Review any backup and restart OpenClaw after
+installation. `--skip-openclaw-config` is the explicit exception for staged operator workflows.
 
 The OpenClaw rewrite still uses this repository's hardened JSON writer: it validates object shape,
-creates a timestamped mode-`0600` pre-edit backup by default, writes atomically with fsync, sends
-OpenClaw only to loopback, and replaces `diagnostics.otel.headers` with an empty object so the
-central credential remains Collector-only. Keep that writer for the current pre-cutover runtime.
+creates a timestamped mode-`0600` backup of an existing config by default, writes atomically with
+fsync, sends OpenClaw only to loopback, and replaces `diagnostics.otel.headers` with an empty object
+so the central credential remains Collector-only. Keep that writer for the current pre-cutover runtime.
 The available native `openclaw config` command is not yet a proven replacement: OpenClaw
 `v2026.4.29` is only the known command-feature floor, not evidence that the installed runtime and
 diagnostics-otel plugin pair emit compatible telemetry. A future native patch must use
@@ -87,11 +90,12 @@ Collector.
 The installer proves that `--node-user` is an unprivileged local account, obtains its real home
 from macOS directory services, detects the local architecture, derives the OpenClaw and package
 paths, and freezes that complete resolved config before making changes.
-Root writes only protected staging files and system LaunchDaemon plists; runtime binaries, config,
-credentials, queue/state directories, logs, and textfile paths are installed as the node user. This
-keeps a node-user path replacement from turning an installer race into a privileged filesystem
-write. The contract tests exercise the privilege boundary and symlink rejection, but a real
-path-swap race still needs final validation in a disposable macOS VM before production rollout.
+Root writes protected staging files and the required system LaunchDaemon, rollback, and retirement
+artifacts under `/Library`; runtime binaries, config, credentials, queue/state directories, logs,
+and textfile paths are installed as the node user. This keeps a node-user path replacement from
+turning an installer race into a privileged filesystem write. The contract tests exercise the
+privilege boundary and symlink rejection, but a real path-swap race still needs final validation in
+a disposable macOS VM before production rollout.
 
 Existing unversioned rich config remains a temporary compatibility input. When the unified
 installer receives it, `node_user`, `node_home`, OpenClaw/runtime paths, loopback endpoints, and the
@@ -165,7 +169,7 @@ This repo should not contain:
 - Charizard deployment scripts
 - live dashboard audit artifacts
 
-## Current Release Quick Start
+## Compatibility Quick Start (0.1.x)
 
 The following commands describe the topology-specific `0.1.x` rollback release. They remain
 available during the `0.2.0` dual-run window; they are not the target onboarding interface.
@@ -189,15 +193,18 @@ FLEET_INGEST_TOKEN=<token> ./bin/configure-openclaw-otel --config /tmp/node-conf
 
 ## Planning Docs
 
-The first extraction pass is cataloged in
-[`docs/extraction-catalog.md`](docs/extraction-catalog.md).
+- [`docs/central-integration-plan.md`](docs/central-integration-plan.md) is the current staged
+  transition and cutover plan.
+- [`docs/central-contract.md`](docs/central-contract.md) records the target cross-repository product
+  and ownership contract used by that plan.
 
-The proposed long-term folder layout is documented in
-[`docs/repository-structure.md`](docs/repository-structure.md).
+Completed extraction and repository-layout plans were removed after their durable ownership and
+transition decisions were incorporated into these current documents. Their history remains in Git.
 
 ## Compatibility Contract
 
-The current release must continue emitting data that the central stack can rely on during migration:
+The compatibility release must continue emitting data that the central stack can rely on during
+migration:
 
 - stable `node` and `node_label` values
 - OpenClaw OTLP logs, metrics, and traces authenticated with central Basic auth
@@ -226,9 +233,10 @@ tests/      Unit and contract tests for node-side behavior.
 
 ## Development
 
-No runtime package manager is required yet. Keep scripts portable to the target
-Mac mini environment unless a dependency is deliberately introduced and
-documented.
+The Python package has no third-party runtime dependencies. The unified macOS installer still
+requires Homebrew and uses it to find or install `node_exporter`; it downloads the pinned Collector
+archive itself unless `--collector-archive` is supplied. Keep scripts portable to the target Mac
+mini environment unless another dependency is deliberately introduced and documented.
 
 Expected local checks after extraction:
 

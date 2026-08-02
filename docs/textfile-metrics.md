@@ -3,10 +3,12 @@
 Collectors write Prometheus textfiles that the current node_exporter/Prometheus scrape path consumes.
 Avoid changing names/labels unless coordinated through release compatibility.
 
-In `0.1.x`, central Prometheus obtains these metrics by scraping node_exporter. In `0.2.0`, the
-node-local Collector scrapes the same loopback node_exporter/textfile surface and exports the
-resulting metrics to Charizard over OTLP/HTTP. The textfile format and metric meaning remain stable;
-only transport and trusted identity assignment move.
+In `0.1.x`, central Prometheus obtains these metrics by scraping node_exporter. The uncutover `0.2.0`
+implementation instead has the node-local Collector scrape the same loopback
+node_exporter/textfile surface and export the resulting metrics to Charizard over OTLP/HTTP. The
+textfile format and metric meaning remain stable; only transport and trusted identity assignment
+move. Live receipt and parity still require the Phase 4 canary described in
+`central-integration-plan.md`.
 
 ## Node-agent heartbeat
 

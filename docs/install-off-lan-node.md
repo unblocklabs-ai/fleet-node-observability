@@ -55,7 +55,9 @@ curl -fsS -H "X-Fleet-Scrape-Token: $(cat /Library/OpenClaw/fleet-node-exporter-
 
 ## Validation
 
-- `curl -I http://127.0.0.1:19100/metrics` should return `403` without token.
+- `curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:19100/metrics` should
+  print `403` without a token. The proxy implements `GET`; `curl -I` sends `HEAD` and is not a valid
+  authorization probe for this compatibility service.
 - Proxy log should be in the install path configured by the installer (often `~/Library/Logs` or `/Library/Logs`).
 - Central scrape target should include only `/metrics` and a token-bearing header.
 

@@ -3,6 +3,10 @@
 This document records the boundary between this node-side repository and the
 central `fleet-observability` repository.
 
+Status: this is the target product contract implemented in the local pre-cutover code. Production
+still uses the transitional `0.1.x` compatibility paths until the Phase 4 canary, receipt, parity,
+and rollback gates in `central-integration-plan.md` are accepted.
+
 ## Durable Contract
 
 Every fleet node is an autonomous telemetry client. It runs one node package, uses one configuration

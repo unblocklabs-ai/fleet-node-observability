@@ -24,7 +24,7 @@ recommended `false`, the writer and its tests must change before any canary. It:
 
 - rejects non-object `diagnostics` and `diagnostics.otel` values;
 - preserves unrelated OpenClaw settings;
-- creates a timestamped, mode-`0600` pre-edit backup unless explicitly disabled;
+- creates a timestamped, mode-`0600` backup of an existing config unless explicitly disabled;
 - writes the replacement JSON atomically, fsyncs it, and leaves mode `0600`;
 - points OpenClaw at the loopback Collector; and
 - replaces `diagnostics.otel.headers` with `{}`, keeping the Charizard credential only in the
@@ -107,7 +107,8 @@ export FLEET_INGEST_TOKEN="TOKEN"
 
 ## Current compatibility config shape
 
-- `~/.openclaw/openclaw.json` backup is created first (timestamped file).
+- When `~/.openclaw/openclaw.json` already exists, a timestamped backup is created before editing it;
+  a first-time config creation has no source file to back up.
 - Diagnostics keys are enabled:
   - `diagnostics.enabled=true`
   - `diagnostics.otel.enabled=true`
