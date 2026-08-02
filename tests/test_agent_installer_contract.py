@@ -93,7 +93,10 @@ class AgentInstallerContractTest(unittest.TestCase):
             self.assertEqual(list(target.iterdir()), [])
 
     def test_source_config_is_normalized_once_and_frozen(self) -> None:
-        self.assertEqual(self.installer.count("config = load_agent_config(sys.argv[1])"), 1)
+        self.assertEqual(self.installer.count("config = load_agent_config("), 1)
+        self.assertIn('SOURCE_CONFIG="$TMP_DIR/source-node-config.json"', self.installer)
+        self.assertIn("os.O_RDONLY | os.O_NOFOLLOW", self.installer)
+        self.assertIn('"$SOURCE_CONFIG" "$FROZEN_CONFIG"', self.installer)
         self.assertIn('FROZEN_CONFIG="$TMP_DIR/node-config.json"', self.installer)
         self.assertNotIn("agent_value()", self.installer)
         self.assertIn('--config "$FROZEN_CONFIG" --token-file "$TOKEN_FILE"', self.installer)
@@ -103,6 +106,50 @@ class AgentInstallerContractTest(unittest.TestCase):
         self.assertNotIn('chown "$NODE_USER" "$FROZEN_CONFIG"', self.installer)
         self.assertIn("verify_frozen_config", self.installer)
         self.assertIn("normalized node config changed during installation", self.installer)
+
+    def test_v2_identity_and_paths_are_resolved_locally_before_freeze(self) -> None:
+        for required in [
+            "--node-user",
+            "--node-exporter-textfile-dir",
+            'dscl . -read "/Users/$NODE_USER" NFSHomeDirectory',
+            'NODE_HOME="$(cd "$SYSTEM_HOME" && pwd -P)"',
+            'arm64) ARCHITECTURE="arm64"; PLATFORM="darwin_arm64"',
+            'x86_64) ARCHITECTURE="x86_64"; PLATFORM="darwin_amd64"',
+            'node_user=sys.argv[3]',
+            'node_home=sys.argv[4]',
+            'architecture=sys.argv[5]',
+            'homebrew_prefix=sys.argv[6]',
+            'node_exporter_textfile_dir=sys.argv[7] or None',
+        ]:
+            self.assertIn(required, self.installer)
+        freeze_index = self.installer.index('FROZEN_CONFIG="$TMP_DIR/node-config.json"')
+        download_index = self.installer.index("[fleet-node-agent] downloading pinned Collector")
+        runtime_index = self.installer.index('RUNTIME_DIR="$NODE_HOME/.openclaw/fleet-node-observability"')
+        self.assertLess(freeze_index, download_index)
+        self.assertLess(freeze_index, runtime_index)
+
+    def test_node_user_is_explicit_for_v2_and_legacy_installs(self) -> None:
+        self.assertIn(
+            '--config, --node-user, and --ingest-token-file are required',
+            self.installer,
+        )
+        self.assertNotIn("CONFIG_NODE_USER", self.installer)
+        required_check = self.installer.index(
+            'if [[ -z "$CONFIG_PATH" || -z "$NODE_USER" || -z "$TOKEN_FILE" ]]'
+        )
+        source_snapshot = self.installer.index('SOURCE_CONFIG="$TMP_DIR/source-node-config.json"')
+        self.assertLess(required_check, source_snapshot)
+
+    def test_one_selected_homebrew_owns_node_exporter_and_textfile_default(self) -> None:
+        for required in [
+            "select_homebrew()",
+            'HOMEBREW_PREFIX="$(select_homebrew)"',
+            'BREW_BIN="$HOMEBREW_PREFIX/bin/brew"',
+            '"$BREW_BIN" --prefix',
+            'local candidate="$HOMEBREW_PREFIX/bin/node_exporter"',
+            'sudo -u "$NODE_USER" "$BREW_BIN" install node_exporter',
+        ]:
+            self.assertIn(required, self.installer)
 
     @unittest.skipIf(os.geteuid() == 0, "requires a genuinely unprivileged test UID")
     def test_root_owned_readonly_snapshot_permission_model(self) -> None:

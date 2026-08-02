@@ -4,6 +4,12 @@
 
 - Added one topology-independent `install-fleet-node-agent` entrypoint and node
   configuration shape for `pull`, `dual`, and `push` rollout states.
+- Reduced version 2 central node config to four intent fields. The unified installer now requires
+  an explicit node account for both v2 and legacy input, resolves its real home and local
+  architecture, selects one verified Homebrew/node_exporter prefix, derives internal paths, and
+  freezes the complete resolved config before managed filesystem changes. Direct helpers resolve
+  equivalent unprivileged local context and refuse implicit root context. Unversioned rich config
+  remains a temporary fail-closed assertion format.
 - Pinned OpenTelemetry Collector Contrib 0.157.0 for Intel and Apple Silicon
   macOS, with SHA-256 verification and config validation before launch.
 - Routed OpenClaw through a loopback-only OTLP/HTTP receiver so the Collector is

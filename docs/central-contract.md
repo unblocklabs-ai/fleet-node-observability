@@ -56,8 +56,33 @@ The split must preserve these interfaces:
 
 The rollout field is `telemetry_mode`: `pull` retains legacy host scraping, `dual` pushes to a
 canary job while retaining pull, and `push` makes pushed host metrics canonical. It is never derived
-from network location. The central runtime inventory is schema 4 and renders the same secret-free
-node config consumed by `install-fleet-node-agent`.
+from network location. The central runtime inventory renders node config schema 2, whose complete
+public shape is:
+
+```json
+{
+  "config_schema_version": 2,
+  "node_label": "mini_03",
+  "telemetry_mode": "dual",
+  "telemetry_endpoint": "https://telemetry.example.com"
+}
+```
+
+Central config must not contain the node account, home, OpenClaw path, package-owned paths,
+loopback ports, node_exporter target, or textfile directory. `install-fleet-node-agent` receives the
+unprivileged account explicitly through `--node-user` for every install, resolves its home with
+macOS directory services, detects architecture, selects and verifies the supported Homebrew prefix
+that owns node_exporter, derives all internal paths locally, and freezes the complete resolved
+config before managed filesystem changes. A node-local textfile-directory override is available
+for an intentionally nonstandard node_exporter setup.
+
+Unversioned rich node config remains a temporary migration input. Its local account, home, path,
+and loopback values are assertions against node-derived context, not central controls; a mismatch
+fails closed.
+
+Direct helper use with schema 2 resolves the current unprivileged account, its real home, local
+architecture, and supported Homebrew prefix. It must fail under root rather than derive root-owned
+runtime paths; root provisioning uses the installer with explicit context.
 
 ## Current Compatibility Surface
 

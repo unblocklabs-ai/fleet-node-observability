@@ -35,7 +35,14 @@ locally; publication, canary installation, Cloudflare changes, and production cu
 
 ## Phase 3: build one node runtime — locally complete
 
-- Replace public LAN/off-LAN entrypoints with one installer and one node configuration.
+- Replace public LAN/off-LAN entrypoints with one installer and a versioned four-field central
+  intent config: schema version, node label, rollout mode, and HTTPS telemetry endpoint.
+- Require the node account as an installer argument for both v2 and legacy input. Resolve the real
+  account home and architecture on the node, select the Homebrew installation that owns
+  node_exporter, derive OpenClaw and package-owned paths locally, and freeze the full resolved
+  config before any managed filesystem mutation.
+- Treat local fields in temporary unversioned rich config as fail-closed assertions during the
+  compatibility window. Do not allow schema 2 central config to set them.
 - Keep node_exporter and current textfile collectors initially to avoid changing metric production
   and transport simultaneously.
 - Add a local collector/exporter that scrapes node_exporter only on loopback and exports OTLP/HTTP.

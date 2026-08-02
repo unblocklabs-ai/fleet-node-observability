@@ -8,6 +8,14 @@ Status: the commands below describe the `0.1.x` compatibility surface. In `0.2.0
 headers. `install-fleet-node-agent` runs it after proving the Collector is healthy. The Collector,
 not OpenClaw, owns the Charizard credential and network connection.
 
+The unified installer derives `~/.openclaw/openclaw.json` from the real home of its explicit
+`--node-user`; schema 2 central config cannot choose or override that path. The commands below remain
+documentation for the older topology-specific compatibility surface.
+
+When `configure-openclaw-local-otel` is used directly with schema 2, it derives the current
+unprivileged account's real home and fails under root. Root provisioning must go through
+`install-fleet-node-agent --node-user <account>`.
+
 ## Goal
 
 All fleet nodes should send OpenClaw diagnostics to a configured OTLP endpoint

@@ -21,6 +21,12 @@ src/fleet_node_observability/
 examples/node-agent.example.json
 ```
 
+The example is the complete central schema-v2 intent contract. Node account, home, architecture,
+selected Homebrew installation, OpenClaw location, package-owned runtime paths, loopback endpoints,
+and textfile directory are node-resolved state rather than generated central configuration. Unified
+installs always require an explicit node account; direct helpers resolve the current unprivileged
+account and refuse root-only implicit context.
+
 The older structure and topology-specific examples below are retained as extraction history, not as
 the preferred interface.
 

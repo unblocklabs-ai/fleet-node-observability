@@ -4,11 +4,13 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fleet_node_observability.agent import (
     COLLECTOR_RELEASES,
     COLLECTOR_VERSION,
     HEARTBEAT_METRIC,
+    LocalNodeContext,
     load_agent_config,
     render_authorization_header,
     render_collector_config,
@@ -35,14 +37,202 @@ class AgentConfigTest(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             return load_agent_config(path)
 
+    def load_v2(self, **overrides: object):
+        payload: dict[str, object] = {
+            "config_schema_version": 2,
+            "node_label": "Mini-03",
+            "telemetry_mode": "dual",
+            "telemetry_endpoint": "https://telemetry.example.com",
+        }
+        payload.update(overrides)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            return load_agent_config(
+                path,
+                node_user="fleet-mini-03",
+                node_home="/Users/fleet-mini-03",
+                architecture="arm64",
+                homebrew_prefix="/opt/homebrew",
+            )
+
     def test_example_loads_without_network_topology(self) -> None:
-        config = load_agent_config(ROOT / "examples" / "node-agent.example.json")
+        config = load_agent_config(
+            ROOT / "examples" / "node-agent.example.json",
+            node_user="fleet-mini-03",
+            node_home="/Users/fleet-mini-03",
+            architecture="arm64",
+            homebrew_prefix="/opt/homebrew",
+        )
         self.assertEqual(config.telemetry_mode, "dual")
         self.assertEqual(config.node_exporter_target, "127.0.0.1:9100")
         source = (ROOT / "examples" / "node-agent.example.json").read_text(encoding="utf-8")
+        self.assertEqual(
+            set(json.loads(source)),
+            {
+                "config_schema_version",
+                "node_label",
+                "telemetry_mode",
+                "telemetry_endpoint",
+            },
+        )
         self.assertNotIn('"network"', source)
         self.assertNotIn("tunnel", source)
         self.assertNotIn("cloudflare", source.lower())
+
+    def test_v2_central_config_contains_only_intent(self) -> None:
+        config = self.load_v2()
+        self.assertEqual(config.node_user, "fleet-mini-03")
+        self.assertEqual(
+            config.openclaw_config_path,
+            Path("/Users/fleet-mini-03/.openclaw/openclaw.json"),
+        )
+        self.assertEqual(
+            config.collector_config_path,
+            Path(
+                "/Users/fleet-mini-03/.openclaw/fleet-node-observability/config/collector.json"
+            ),
+        )
+        for forbidden in [
+            "node_user",
+            "node_home",
+            "openclaw_config_path",
+            "node_exporter_target",
+            "queue_directory",
+        ]:
+            with self.subTest(forbidden=forbidden), self.assertRaisesRegex(
+                ConfigError, "may contain only"
+            ):
+                self.load_v2(**{forbidden: "centrally-controlled"})
+
+    def test_v2_without_explicit_context_fails_clearly_as_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "config_schema_version": 2,
+                        "node_label": "mini-03",
+                        "telemetry_mode": "push",
+                        "telemetry_endpoint": "https://telemetry.example.com",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch(
+                "fleet_node_observability.agent.os.geteuid", return_value=0
+            ), self.assertRaisesRegex(ConfigError, "unprivileged node account, not root"):
+                load_agent_config(path)
+
+    def test_v2_helpers_can_resolve_current_unprivileged_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "config_schema_version": 2,
+                        "node_label": "mini-03",
+                        "telemetry_mode": "push",
+                        "telemetry_endpoint": "https://telemetry.example.com",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            local = LocalNodeContext(
+                node_user="local-node",
+                node_home=Path(tmpdir),
+                architecture="arm64",
+                homebrew_prefix=Path("/opt/homebrew"),
+            )
+            with patch(
+                "fleet_node_observability.agent.resolve_current_node_context",
+                return_value=local,
+            ):
+                config = load_agent_config(path)
+        self.assertEqual(config.node_user, "local-node")
+        self.assertEqual(config.node_home, Path(tmpdir))
+
+    def test_textfile_default_is_derived_from_selected_homebrew_prefix(self) -> None:
+        self.assertEqual(
+            self.load_v2().node_exporter_textfile_dir,
+            Path("/opt/homebrew/var/lib/node_exporter/textfile_collector"),
+        )
+        payload = {
+            "config_schema_version": 2,
+            "node_label": "mini-03",
+            "telemetry_mode": "push",
+            "telemetry_endpoint": "https://telemetry.example.com",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_agent_config(
+                path,
+                node_user="fleet-mini-03",
+                node_home="/Users/fleet-mini-03",
+                architecture="x86_64",
+                homebrew_prefix="/usr/local",
+            )
+        self.assertEqual(
+            config.node_exporter_textfile_dir,
+            Path("/usr/local/var/lib/node_exporter/textfile_collector"),
+        )
+
+    def test_installer_textfile_override_is_local_and_explicit(self) -> None:
+        payload = {
+            "config_schema_version": 2,
+            "node_label": "mini-03",
+            "telemetry_mode": "push",
+            "telemetry_endpoint": "https://telemetry.example.com",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_agent_config(
+                path,
+                node_user="fleet-mini-03",
+                node_home="/Users/fleet-mini-03",
+                architecture="arm64",
+                homebrew_prefix="/opt/homebrew",
+                node_exporter_textfile_dir="/Volumes/metrics/node-exporter",
+            )
+        self.assertEqual(
+            config.node_exporter_textfile_dir,
+            Path("/Volumes/metrics/node-exporter"),
+        )
+
+    def test_legacy_local_fields_are_fail_closed_assertions(self) -> None:
+        payload = {
+            "node_label": "mini-03",
+            "node_user": "wrong-user",
+            "node_home": "/Users/fleet-mini-03",
+            "telemetry_mode": "dual",
+            "telemetry_endpoint": "https://telemetry.example.com",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "node.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "legacy node_user is an assertion"):
+                load_agent_config(
+                    path,
+                    node_user="fleet-mini-03",
+                    node_home="/Users/fleet-mini-03",
+                    architecture="arm64",
+                    homebrew_prefix="/opt/homebrew",
+                )
+            payload["node_user"] = "fleet-mini-03"
+            payload["collector_config_path"] = "/tmp/collector.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(
+                ConfigError, "legacy collector_config_path is an assertion"
+            ):
+                load_agent_config(
+                    path,
+                    node_user="fleet-mini-03",
+                    node_home="/Users/fleet-mini-03",
+                    architecture="arm64",
+                    homebrew_prefix="/opt/homebrew",
+                )
 
     def test_requires_https_base_endpoint(self) -> None:
         invalid_endpoints = [

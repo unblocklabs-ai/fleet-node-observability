@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
+import pwd
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +35,11 @@ COLLECTOR_RELEASES: dict[str, dict[str, str]] = {
 
 TELEMETRY_MODES = frozenset({"pull", "dual", "push"})
 HEARTBEAT_METRIC = "fleet_node_agent_heartbeat_timestamp_seconds"
+CENTRAL_CONFIG_SCHEMA_VERSION = 2
+CENTRAL_CONFIG_KEYS = frozenset(
+    {"config_schema_version", "node_label", "telemetry_mode", "telemetry_endpoint"}
+)
+SUPPORTED_HOMEBREW_PREFIXES = (Path("/opt/homebrew"), Path("/usr/local"))
 
 
 @dataclass(frozen=True)
@@ -50,6 +59,14 @@ class AgentConfig:
     local_otlp_endpoint: str = "127.0.0.1:4318"
     collector_metrics_endpoint: str = "127.0.0.1:8888"
     health_endpoint: str = "127.0.0.1:13133"
+
+
+@dataclass(frozen=True)
+class LocalNodeContext:
+    node_user: str
+    node_home: Path
+    architecture: str
+    homebrew_prefix: Path
 
 
 def _load_object(path: Path) -> dict[str, Any]:
@@ -123,15 +140,175 @@ def _validate_endpoint(value: str) -> str:
     return value.rstrip("/")
 
 
-def load_agent_config(path: Path | str) -> AgentConfig:
-    payload = _load_object(Path(path))
-    node_label = normalize_label(_required_string(payload, "node_label"))
-    node_user = _required_string(payload, "node_user")
-    if any(char.isspace() for char in node_user) or "/" in node_user:
+def _validate_node_user(value: str) -> str:
+    if any(char.isspace() for char in value) or "/" in value:
         raise ConfigError("node_user must be a local account name")
+    return value
 
-    node_home = _absolute_path(_required_string(payload, "node_home"), key="node_home")
-    mode = _string(payload, "telemetry_mode", "push").lower()
+
+def _validate_architecture(value: str) -> str:
+    normalized = value.lower()
+    if normalized == "amd64":
+        normalized = "x86_64"
+    if normalized not in {"arm64", "x86_64"}:
+        raise ConfigError(f"unsupported macOS architecture: {value}")
+    return normalized
+
+
+def _validate_homebrew_prefix(value: Path | str) -> Path:
+    prefix = _absolute_path(str(value), key="homebrew_prefix")
+    if prefix not in SUPPORTED_HOMEBREW_PREFIXES:
+        supported = ", ".join(str(item) for item in SUPPORTED_HOMEBREW_PREFIXES)
+        raise ConfigError(f"homebrew_prefix must be one of: {supported}")
+    return prefix
+
+
+def _detect_homebrew_prefix() -> Path:
+    def is_selected_brew(prefix: Path) -> bool:
+        brew = prefix / "bin" / "brew"
+        if not brew.is_file() or not os.access(brew, os.X_OK):
+            return False
+        try:
+            result = subprocess.run(
+                [str(brew), "--prefix"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0 and result.stdout.strip() == str(prefix)
+
+    available = [
+        prefix
+        for prefix in SUPPORTED_HOMEBREW_PREFIXES
+        if is_selected_brew(prefix)
+    ]
+    installed = [
+        prefix
+        for prefix in available
+        if (prefix / "bin" / "node_exporter").is_file()
+        and os.access(prefix / "bin" / "node_exporter", os.X_OK)
+    ]
+    if installed:
+        return installed[0]
+    if available:
+        return available[0]
+    raise ConfigError("Homebrew was not found at /opt/homebrew or /usr/local")
+
+
+def resolve_current_node_context() -> LocalNodeContext:
+    effective_uid = os.geteuid()
+    if effective_uid == 0:
+        raise ConfigError(
+            "version 2 config without explicit installer context must run as an "
+            "unprivileged node account, not root"
+        )
+    try:
+        account = pwd.getpwuid(effective_uid)
+    except KeyError as exc:
+        raise ConfigError(f"unable to resolve local account for uid {effective_uid}") from exc
+    node_user = _validate_node_user(account.pw_name)
+    node_home = _absolute_path(account.pw_dir, key="node_home")
+    try:
+        resolved_home = node_home.resolve(strict=True)
+    except OSError as exc:
+        raise ConfigError(f"unable to resolve local node home {node_home}: {exc}") from exc
+    if not resolved_home.is_dir():
+        raise ConfigError(f"local node home is not a directory: {resolved_home}")
+    return LocalNodeContext(
+        node_user=node_user,
+        node_home=resolved_home,
+        architecture=_validate_architecture(platform.machine()),
+        homebrew_prefix=_detect_homebrew_prefix(),
+    )
+
+
+def _assert_legacy_value(
+    payload: dict[str, Any], key: str, expected: str, *, node_home: Path | None = None
+) -> None:
+    if key not in payload:
+        return
+    actual = _string(payload, key, expected)
+    if key.endswith("_path") or key.endswith("_dir") or key == "node_home":
+        actual = str(_absolute_path(actual, key=key, node_home=node_home))
+    if actual != expected:
+        raise ConfigError(
+            f"legacy {key} is an assertion and does not match locally derived value: "
+            f"expected {expected}"
+        )
+
+
+def load_agent_config(
+    path: Path | str,
+    *,
+    node_user: str | None = None,
+    node_home: Path | str | None = None,
+    architecture: str | None = None,
+    homebrew_prefix: Path | str | None = None,
+    node_exporter_textfile_dir: Path | str | None = None,
+) -> AgentConfig:
+    payload = _load_object(Path(path))
+    is_central_v2 = "config_schema_version" in payload
+    if is_central_v2:
+        version = payload.get("config_schema_version")
+        if isinstance(version, bool) or version != CENTRAL_CONFIG_SCHEMA_VERSION:
+            raise ConfigError(
+                f"config_schema_version must be {CENTRAL_CONFIG_SCHEMA_VERSION}"
+            )
+        unknown_keys = sorted(set(payload) - CENTRAL_CONFIG_KEYS)
+        if unknown_keys:
+            raise ConfigError(
+                "version 2 central config may contain only config_schema_version, "
+                "node_label, telemetry_mode, and telemetry_endpoint; unexpected: "
+                + ", ".join(unknown_keys)
+            )
+        explicit_context = (node_user, node_home, architecture, homebrew_prefix)
+        if all(value is None for value in explicit_context):
+            local = resolve_current_node_context()
+            node_user = local.node_user
+            node_home = local.node_home
+            architecture = local.architecture
+            homebrew_prefix = local.homebrew_prefix
+        elif any(value is None for value in explicit_context):
+            raise ConfigError(
+                "version 2 explicit context requires node_user, node_home, "
+                "architecture, and homebrew_prefix"
+            )
+
+    node_label = normalize_label(_required_string(payload, "node_label"))
+    configured_node_user = payload.get("node_user")
+    if node_user is None:
+        resolved_node_user = _validate_node_user(_required_string(payload, "node_user"))
+    else:
+        resolved_node_user = _validate_node_user(node_user.strip())
+        if not resolved_node_user:
+            raise ConfigError("node_user must be a non-empty local account name")
+        if configured_node_user is not None:
+            _assert_legacy_value(payload, "node_user", resolved_node_user)
+
+    if node_home is None:
+        resolved_node_home = _absolute_path(
+            _required_string(payload, "node_home"), key="node_home"
+        )
+    else:
+        resolved_node_home = _absolute_path(str(node_home), key="node_home")
+        _assert_legacy_value(payload, "node_home", str(resolved_node_home))
+    if architecture is not None:
+        _validate_architecture(architecture)
+    resolved_homebrew_prefix = (
+        _validate_homebrew_prefix(homebrew_prefix)
+        if homebrew_prefix is not None
+        else None
+    )
+
+    mode_key = _required_string if is_central_v2 else _string
+    mode = (
+        mode_key(payload, "telemetry_mode")
+        if is_central_v2
+        else mode_key(payload, "telemetry_mode", "push")
+    ).lower()
     if mode not in TELEMETRY_MODES:
         raise ConfigError("telemetry_mode must be one of: pull, dual, push")
     raw_telemetry_endpoint = payload.get("telemetry_endpoint")
@@ -141,25 +318,85 @@ def load_agent_config(path: Path | str) -> AgentConfig:
     ):
         raise ConfigError("telemetry_endpoint must not include surrounding whitespace")
 
-    base_dir = node_home / ".openclaw" / "fleet-node-observability"
+    base_dir = resolved_node_home / ".openclaw" / "fleet-node-observability"
+    expected_paths = {
+        "openclaw_config_path": resolved_node_home / ".openclaw" / "openclaw.json",
+        "collector_config_path": base_dir / "config" / "collector.json",
+        "authorization_header_path": base_dir / "secrets" / "authorization-header",
+        "queue_directory": base_dir / "queue",
+        "collector_binary_path": base_dir / "bin" / "otelcol-contrib",
+    }
+    strict_local_context = is_central_v2 or any(
+        value is not None
+        for value in (
+            node_user,
+            node_home,
+            architecture,
+            homebrew_prefix,
+            node_exporter_textfile_dir,
+        )
+    )
+    if node_exporter_textfile_dir is not None:
+        expected_textfile_dir = _absolute_path(
+            str(node_exporter_textfile_dir), key="node_exporter_textfile_dir"
+        )
+    elif resolved_homebrew_prefix is not None:
+        expected_textfile_dir = (
+            resolved_homebrew_prefix
+            / "var"
+            / "lib"
+            / "node_exporter"
+            / "textfile_collector"
+        )
+    else:
+        expected_textfile_dir = Path(
+            "/opt/homebrew/var/lib/node_exporter/textfile_collector"
+        )
+
+    if strict_local_context and not is_central_v2:
+        for key, expected in expected_paths.items():
+            _assert_legacy_value(
+                payload, key, str(expected), node_home=resolved_node_home
+            )
+        _assert_legacy_value(payload, "node_exporter_target", "127.0.0.1:9100")
+        _assert_legacy_value(
+            payload,
+            "node_exporter_textfile_dir",
+            str(expected_textfile_dir),
+            node_home=resolved_node_home,
+        )
+        _assert_legacy_value(payload, "local_otlp_endpoint", "127.0.0.1:4318")
+        _assert_legacy_value(
+            payload, "collector_metrics_endpoint", "127.0.0.1:8888"
+        )
+        _assert_legacy_value(payload, "health_endpoint", "127.0.0.1:13133")
+
     config = AgentConfig(
         node_label=node_label,
-        node_user=node_user,
-        node_home=node_home,
+        node_user=resolved_node_user,
+        node_home=resolved_node_home,
         telemetry_mode=mode,
-        telemetry_endpoint=_validate_endpoint(_required_string(payload, "telemetry_endpoint")),
+        telemetry_endpoint=_validate_endpoint(
+            _required_string(payload, "telemetry_endpoint")
+        ),
         openclaw_config_path=_absolute_path(
-            _string(payload, "openclaw_config_path", "~/.openclaw/openclaw.json"),
+            str(expected_paths["openclaw_config_path"])
+            if strict_local_context
+            else _string(payload, "openclaw_config_path", "~/.openclaw/openclaw.json"),
             key="openclaw_config_path",
-            node_home=node_home,
+            node_home=resolved_node_home,
         ),
         node_exporter_target=_validate_host_port(
-            _string(payload, "node_exporter_target", "127.0.0.1:9100"),
+            "127.0.0.1:9100"
+            if strict_local_context
+            else _string(payload, "node_exporter_target", "127.0.0.1:9100"),
             key="node_exporter_target",
             require_loopback=True,
         ),
         node_exporter_textfile_dir=_absolute_path(
-            _string(
+            str(expected_textfile_dir)
+            if strict_local_context
+            else _string(
                 payload,
                 "node_exporter_textfile_dir",
                 "/opt/homebrew/var/lib/node_exporter/textfile_collector",
@@ -167,37 +404,63 @@ def load_agent_config(path: Path | str) -> AgentConfig:
             key="node_exporter_textfile_dir",
         ),
         collector_config_path=_absolute_path(
-            _string(payload, "collector_config_path", str(base_dir / "config" / "collector.json")),
+            str(expected_paths["collector_config_path"])
+            if strict_local_context
+            else _string(
+                payload,
+                "collector_config_path",
+                str(expected_paths["collector_config_path"]),
+            ),
             key="collector_config_path",
         ),
         authorization_header_path=_absolute_path(
-            _string(
+            str(expected_paths["authorization_header_path"])
+            if strict_local_context
+            else _string(
                 payload,
                 "authorization_header_path",
-                str(base_dir / "secrets" / "authorization-header"),
+                str(expected_paths["authorization_header_path"]),
             ),
             key="authorization_header_path",
         ),
         queue_directory=_absolute_path(
-            _string(payload, "queue_directory", str(base_dir / "queue")),
+            str(expected_paths["queue_directory"])
+            if strict_local_context
+            else _string(
+                payload,
+                "queue_directory",
+                str(expected_paths["queue_directory"]),
+            ),
             key="queue_directory",
         ),
         collector_binary_path=_absolute_path(
-            _string(payload, "collector_binary_path", str(base_dir / "bin" / "otelcol-contrib")),
+            str(expected_paths["collector_binary_path"])
+            if strict_local_context
+            else _string(
+                payload,
+                "collector_binary_path",
+                str(expected_paths["collector_binary_path"]),
+            ),
             key="collector_binary_path",
         ),
         local_otlp_endpoint=_validate_host_port(
-            _string(payload, "local_otlp_endpoint", "127.0.0.1:4318"),
+            "127.0.0.1:4318"
+            if strict_local_context
+            else _string(payload, "local_otlp_endpoint", "127.0.0.1:4318"),
             key="local_otlp_endpoint",
             require_loopback=True,
         ),
         collector_metrics_endpoint=_validate_host_port(
-            _string(payload, "collector_metrics_endpoint", "127.0.0.1:8888"),
+            "127.0.0.1:8888"
+            if strict_local_context
+            else _string(payload, "collector_metrics_endpoint", "127.0.0.1:8888"),
             key="collector_metrics_endpoint",
             require_loopback=True,
         ),
         health_endpoint=_validate_host_port(
-            _string(payload, "health_endpoint", "127.0.0.1:13133"),
+            "127.0.0.1:13133"
+            if strict_local_context
+            else _string(payload, "health_endpoint", "127.0.0.1:13133"),
             key="health_endpoint",
             require_loopback=True,
         ),
@@ -217,12 +480,16 @@ def load_agent_config(path: Path | str) -> AgentConfig:
         Path("/opt/homebrew/var/lib/node_exporter/textfile_collector"),
         Path("/usr/local/var/lib/node_exporter/textfile_collector"),
     }
-    if config.node_exporter_textfile_dir not in allowed_textfile_dirs:
+    if (
+        node_exporter_textfile_dir is None
+        and config.node_exporter_textfile_dir not in allowed_textfile_dirs
+    ):
         try:
-            config.node_exporter_textfile_dir.relative_to(node_home)
+            config.node_exporter_textfile_dir.relative_to(resolved_node_home)
         except ValueError as exc:
             raise ConfigError(
-                "node_exporter_textfile_dir must use a supported Homebrew path or live under node_home"
+                "node_exporter_textfile_dir must use a supported Homebrew path "
+                "or live under node_home"
             ) from exc
     return config
 

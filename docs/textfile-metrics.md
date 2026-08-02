@@ -130,14 +130,23 @@ node_exporter to loopback and does not expose it to Charizard or Cloudflare.
 
 ## File locations
 
-Default on macOS package default:
+Default when node_exporter is selected from `/opt/homebrew`:
 
 - `/opt/homebrew/var/lib/node_exporter/textfile_collector/`
 
-Installer examples may override with:
+Default when node_exporter is selected from `/usr/local`:
+
+- `/usr/local/var/lib/node_exporter/textfile_collector/`
+
+The unified installer selects and validates one supported Homebrew installation before freezing
+config, uses that same prefix for the node_exporter binary or installation, and derives the
+textfile path from it. A node with an intentionally nonstandard node_exporter configuration may
+override the path locally with:
 
 - `--node-exporter-textfile-dir`
-- `fleet_node_exporter_textfile_dir` in node JSON config.
+
+Schema 2 central config cannot set this path. The older topology-specific installers and their
+unversioned configs retain their existing compatibility flags during the migration window.
 
 ## Troubleshooting
 

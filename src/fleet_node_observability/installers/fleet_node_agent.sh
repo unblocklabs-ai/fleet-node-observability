@@ -3,12 +3,15 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: sudo install-fleet-node-agent --config <path> --ingest-token-file <path> [options]
+Usage: sudo install-fleet-node-agent --config <path> --node-user <account> --ingest-token-file <path> [options]
 
 Installs the single fleet node telemetry process on macOS. The ingest token must
 come from a mode-0600 file; it is never accepted through argv or environment.
 
 Options:
+  --node-user <account>       Required unprivileged account that owns the node runtime.
+  --node-exporter-textfile-dir <path>
+                             Override the selected-Homebrew textfile collector path.
   --collector-archive <path>  Use an already-downloaded pinned Collector archive.
   --retire-legacy-pull        Push mode only: retire the old scrape proxy/exposed exporter.
   --skip-openclaw-config      Do not rewrite OpenClaw diagnostics to loopback OTLP.
@@ -21,6 +24,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CONFIG_PATH=""
 TOKEN_FILE=""
+NODE_USER=""
+TEXTFILE_DIR_OVERRIDE=""
 COLLECTOR_ARCHIVE=""
 RETIRE_LEGACY_PULL=0
 SKIP_OPENCLAW_CONFIG=0
@@ -33,6 +38,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ingest-token-file)
       TOKEN_FILE="${2:-}"
+      shift 2
+      ;;
+    --node-user)
+      NODE_USER="${2:-}"
+      shift 2
+      ;;
+    --node-exporter-textfile-dir)
+      TEXTFILE_DIR_OVERRIDE="${2:-}"
       shift 2
       ;;
     --collector-archive)
@@ -59,8 +72,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$CONFIG_PATH" || -z "$TOKEN_FILE" ]]; then
-  echo "--config and --ingest-token-file are required" >&2
+if [[ -z "$CONFIG_PATH" || -z "$NODE_USER" || -z "$TOKEN_FILE" ]]; then
+  echo "--config, --node-user, and --ingest-token-file are required" >&2
   usage >&2
   exit 2
 fi
@@ -72,7 +85,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "fleet-node-agent currently supports macOS nodes only." >&2
   exit 1
 fi
-for command_name in curl shasum tar launchctl sudo; do
+for command_name in curl dscl shasum tar launchctl sudo; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "$command_name is required" >&2
     exit 1
@@ -106,15 +119,113 @@ fi
 TMP_DIR="$(mktemp -d /tmp/fleet-node-agent-install.XXXXXX)"
 chmod 0711 "$TMP_DIR"
 trap 'rm -rf "$TMP_DIR"' EXIT
+SOURCE_CONFIG="$TMP_DIR/source-node-config.json"
+"$PYTHON_BIN" - "$CONFIG_PATH" "$SOURCE_CONFIG" <<'PY'
+import os
+import stat
+import sys
+
+descriptor = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        raise SystemExit("--config must be a regular file, not a symlink")
+    chunks = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > 1024 * 1024:
+            raise SystemExit("--config exceeds the 1 MiB safety limit")
+        chunks.append(chunk)
+    after = os.fstat(descriptor)
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+        raise SystemExit("--config changed while it was being read")
+finally:
+    os.close(descriptor)
+
+output = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+with os.fdopen(output, "wb") as handle:
+    handle.write(b"".join(chunks))
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+
+if ! id "$NODE_USER" >/dev/null 2>&1; then
+  echo "Configured node_user does not exist: $NODE_USER" >&2
+  exit 1
+fi
+NODE_UID="$(id -u "$NODE_USER")"
+if [[ "$NODE_UID" -eq 0 ]]; then
+  echo "node_user must be an unprivileged local account" >&2
+  exit 1
+fi
+SYSTEM_HOME="$(dscl . -read "/Users/$NODE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
+if [[ -z "$SYSTEM_HOME" || ! -d "$SYSTEM_HOME" ]]; then
+  echo "unable to resolve the system home for $NODE_USER" >&2
+  exit 1
+fi
+NODE_HOME="$(cd "$SYSTEM_HOME" && pwd -P)"
+
+case "$(uname -m)" in
+  arm64) ARCHITECTURE="arm64"; PLATFORM="darwin_arm64" ;;
+  x86_64) ARCHITECTURE="x86_64"; PLATFORM="darwin_amd64" ;;
+  *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+select_homebrew() {
+  local preferred_prefix="/usr/local"
+  local alternate_prefix="/opt/homebrew"
+  local prefix
+  if [[ "$ARCHITECTURE" == "arm64" ]]; then
+    preferred_prefix="/opt/homebrew"
+    alternate_prefix="/usr/local"
+  fi
+  for prefix in "$preferred_prefix" "$alternate_prefix"; do
+    if [[ -x "$prefix/bin/brew" && -x "$prefix/bin/node_exporter" ]]; then
+      printf '%s\n' "$prefix"
+      return 0
+    fi
+  done
+  for prefix in "$preferred_prefix" "$alternate_prefix"; do
+    if [[ -x "$prefix/bin/brew" ]]; then
+      printf '%s\n' "$prefix"
+      return 0
+    fi
+  done
+  echo "Homebrew is required at /opt/homebrew or /usr/local" >&2
+  return 1
+}
+
+HOMEBREW_PREFIX="$(select_homebrew)"
+BREW_BIN="$HOMEBREW_PREFIX/bin/brew"
+REPORTED_HOMEBREW_PREFIX="$(sudo -u "$NODE_USER" "$BREW_BIN" --prefix)"
+if [[ "$REPORTED_HOMEBREW_PREFIX" != "$HOMEBREW_PREFIX" ]]; then
+  echo "selected Homebrew reported an unexpected prefix: $REPORTED_HOMEBREW_PREFIX" >&2
+  exit 1
+fi
+
 FROZEN_CONFIG="$TMP_DIR/node-config.json"
-PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - "$CONFIG_PATH" "$FROZEN_CONFIG" <<'PY'
+PYTHONPATH="$REPO_DIR/src" "$PYTHON_BIN" - \
+  "$SOURCE_CONFIG" "$FROZEN_CONFIG" "$NODE_USER" "$NODE_HOME" "$ARCHITECTURE" \
+  "$HOMEBREW_PREFIX" "$TEXTFILE_DIR_OVERRIDE" <<'PY'
 import json
 import os
 import sys
 from dataclasses import fields
 from fleet_node_observability.agent import load_agent_config
 
-config = load_agent_config(sys.argv[1])
+config = load_agent_config(
+    sys.argv[1],
+    node_user=sys.argv[3],
+    node_home=sys.argv[4],
+    architecture=sys.argv[5],
+    homebrew_prefix=sys.argv[6],
+    node_exporter_textfile_dir=sys.argv[7] or None,
+)
 payload = {field.name: str(getattr(config, field.name)) for field in fields(config)}
 descriptor = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -173,20 +284,6 @@ NODE_EXPORTER_TARGET="$(frozen_value node_exporter_target)"
 LOCAL_OTLP_ENDPOINT="$(frozen_value local_otlp_endpoint)"
 TELEMETRY_ENDPOINT="$(frozen_value telemetry_endpoint)"
 
-if ! id "$NODE_USER" >/dev/null 2>&1; then
-  echo "Configured node_user does not exist: $NODE_USER" >&2
-  exit 1
-fi
-NODE_UID="$(id -u "$NODE_USER")"
-if [[ "$NODE_UID" -eq 0 ]]; then
-  echo "node_user must be an unprivileged local account" >&2
-  exit 1
-fi
-SYSTEM_HOME="$(dscl . -read "/Users/$NODE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
-if [[ -z "$SYSTEM_HOME" || "$(cd "$SYSTEM_HOME" && pwd -P)" != "$NODE_HOME" ]]; then
-  echo "node_home must match the system home for $NODE_USER: ${SYSTEM_HOME:-unresolved}" >&2
-  exit 1
-fi
 if [[ "$RETIRE_LEGACY_PULL" -eq 1 && "$TELEMETRY_MODE" != "push" ]]; then
   echo "--retire-legacy-pull is allowed only when telemetry_mode is push" >&2
   exit 1
@@ -196,11 +293,6 @@ run_as_node() {
   sudo -u "$NODE_USER" "$@"
 }
 
-case "$(uname -m)" in
-  arm64) PLATFORM="darwin_arm64" ;;
-  x86_64) PLATFORM="darwin_amd64" ;;
-  *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
-esac
 COLLECTOR_URL="$(release_value "$PLATFORM" url)"
 COLLECTOR_SHA256="$(release_value "$PLATFORM" sha256)"
 
@@ -285,31 +377,20 @@ LEGACY_PROXY_RETIRED="$LEGACY_PROXY_PLIST.retired-by-fleet-agent"
 LEGACY_RETIRE_MARKER="/Library/LaunchDaemons/.com.unblocklabs.fleet-node-agent.legacy-pull-retired"
 
 find_node_exporter() {
-  for candidate in /opt/homebrew/bin/node_exporter /usr/local/bin/node_exporter; do
-    if [[ -x "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-  return 1
+  local candidate="$HOMEBREW_PREFIX/bin/node_exporter"
+  [[ -x "$candidate" ]] || return 1
+  printf '%s\n' "$candidate"
 }
 
 ensure_node_exporter_installed() {
   if find_node_exporter >/dev/null; then
     return
   fi
-  local brew_bin=""
-  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
-    if [[ -x "$candidate" ]]; then
-      brew_bin="$candidate"
-      break
-    fi
-  done
-  if [[ -z "$brew_bin" ]]; then
-    echo "Homebrew is required to install node_exporter" >&2
+  sudo -u "$NODE_USER" "$BREW_BIN" install node_exporter
+  if ! find_node_exporter >/dev/null; then
+    echo "Homebrew did not install node_exporter under $HOMEBREW_PREFIX" >&2
     exit 1
   fi
-  sudo -u "$NODE_USER" "$brew_bin" install node_exporter
 }
 
 install_loopback_node_exporter() {
