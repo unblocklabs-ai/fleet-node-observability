@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -165,6 +166,29 @@ class PackagingContractTests(unittest.TestCase):
 
             self.assertEqual(overwrite_result.returncode, 0, overwrite_result.stderr)
             self.assertFalse(stale_file.exists())
+
+    def test_install_from_release_root_is_traversable_by_runtime_user(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            tarball = self.build_release(temp_path / "dist")
+            install_dir = temp_path / "fleet-node-observability"
+
+            result = subprocess.run(
+                [
+                    str(ROOT / "packaging" / "install-from-release.sh"),
+                    "--tarball",
+                    str(tarball),
+                    "--install-dir",
+                    str(install_dir),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(stat.S_IMODE(install_dir.stat().st_mode), 0o755)
 
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks are not supported")
     def test_install_from_release_rejects_symlinked_install_dir(self) -> None:

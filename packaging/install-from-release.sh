@@ -346,6 +346,10 @@ install_stage="$(mktemp -d "${install_parent}/.fleet-node-observability.install.
 old_parent=""
 old_install=""
 cp -R "${extract_root}/." "${install_stage}/"
+# mktemp intentionally creates the sibling stage as 0700. The installed agent
+# later drops privileges and reads release helpers from this tree, so the final
+# release root must be traversable by that unprivileged node account.
+chmod 0755 "${install_stage}"
 if [[ -f "${install_stage}/packaging/build-release.sh" ]]; then
   chmod +x "${install_stage}/packaging/build-release.sh"
 fi

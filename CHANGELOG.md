@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.2.0 - Unreleased
+## 0.2.1 - 2026-08-02
+
+- Fixed release installation permissions so the unprivileged node service account can traverse the
+  installed release root while the root installer copies runtime helpers.
+
+## 0.2.0 - 2026-08-02
 
 - Added one node installer and one exact schema-3 intent containing node label, canonical HTTPS
   telemetry endpoint, and Codex usage capability. Accounts, paths, architecture, package locations,
