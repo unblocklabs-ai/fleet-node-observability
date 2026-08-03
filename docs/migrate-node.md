@@ -45,6 +45,10 @@ headers, then restart the OpenClaw gateway. When the restart runs through non-lo
 explicit PATH containing the managed account's npm-global, local-bin, FNM default-runtime,
 Homebrew, and system directories; do not assume shell startup files resolved `node`.
 
+The installer must report that the official `diagnostics-otel` extension is installed or already
+ready. Configuration alone is insufficient: after restart, confirm the Collector accepted and sent
+log records before using Loki receipt as the final proof.
+
 ## 4. Verify the node
 
 Prove the long-running services and local sources rather than relying only on installer output:

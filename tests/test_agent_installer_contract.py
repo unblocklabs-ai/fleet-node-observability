@@ -83,7 +83,8 @@ class AgentInstallerContractTest(unittest.TestCase):
             'x86_64) ARCHITECTURE="x86_64"; PLATFORM="darwin_amd64"',
             "select_homebrew()",
             'HOMEBREW_PREFIX="$(select_homebrew)"',
-            'sudo -u "$NODE_USER" "$BREW_BIN" install node_exporter',
+            'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1',
+            '"$BREW_BIN" install node_exporter',
         ]:
             self.assertIn(required, self.installer)
         self.assertNotIn("--node-exporter-textfile-dir", self.installer)
@@ -150,6 +151,10 @@ class AgentInstallerContractTest(unittest.TestCase):
         self.assertIn(
             'run_as_node env PYTHONPATH="$RUNTIME_PYTHON" \\\n'
             '  "$PYTHON_BIN" -m fleet_node_observability.commands.configure_openclaw_local_otel',
+            self.installer,
+        )
+        self.assertIn(
+            'fleet_node_observability.commands.ensure_openclaw_diagnostics_otel',
             self.installer,
         )
         scheduled = self.installer[self.installer.index('GATEWAY_SCRIPT=') :]

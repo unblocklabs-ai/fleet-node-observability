@@ -9,6 +9,8 @@ Tempo, inventory, credential, and Charizard deployment code lives in the separat
 Every node runs the same local services:
 
 - OpenClaw sends OTLP/HTTP logs, metrics, and traces to `127.0.0.1:4318` with no central credential.
+- The installer ensures OpenClaw's official `diagnostics-otel` extension is present, enabled, and
+  pinned to the matching OpenClaw release so the configured OTLP signals have a producer.
 - A pinned OpenTelemetry Collector Contrib process receives OpenClaw telemetry, scrapes loopback
   node_exporter and its own metrics, batches and queues each signal, and sends authenticated
   OTLP/HTTP to one canonical HTTPS endpoint.
@@ -64,7 +66,8 @@ The installer:
 4. renders and validates the complete Collector configuration;
 5. installs the final LaunchDaemons and proves Collector health, node_exporter metrics, and a fresh
    heartbeat; and
-6. atomically points OpenClaw at loopback OTLP after making a private timestamped backup when an
+6. ensures OpenClaw's official diagnostics OTLP extension is installed and loadable; and
+7. atomically points OpenClaw at loopback OTLP after making a private timestamped backup when an
    existing config is present.
 
 OpenClaw content capture is disabled. Its OTLP headers are replaced with an empty object so stale

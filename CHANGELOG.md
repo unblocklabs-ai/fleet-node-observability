@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.5 - 2026-08-03
+
+- Ensured the official `diagnostics-otel` OpenClaw extension is installed, pinned to the matching
+  OpenClaw release, enabled, and loadable before configuring loopback OTLP.
+- Disabled Homebrew catalog auto-update and hint output during a missing node_exporter install;
+  the installer still installs the required pinned-by-Homebrew node_exporter formula.
+
 ## 0.2.4 - 2026-08-03
 
 - Added FNM's stable default Node runtime directory to scheduled collector PATH resolution so

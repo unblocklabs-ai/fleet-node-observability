@@ -423,7 +423,9 @@ ensure_node_exporter_installed() {
   if find_node_exporter >/dev/null; then
     return
   fi
-  sudo -u "$NODE_USER" "$BREW_BIN" install node_exporter
+  sudo -u "$NODE_USER" env \
+    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 \
+    "$BREW_BIN" install node_exporter
   if ! find_node_exporter >/dev/null; then
     echo "Homebrew did not install node_exporter under $HOMEBREW_PREFIX" >&2
     exit 1
@@ -461,7 +463,14 @@ PLIST
   launchctl kickstart -k "system/$NODE_EXPORTER_LABEL"
 }
 
+PYTHONPATH_VALUE="$RUNTIME_PYTHON"
+PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:$NODE_HOME/.local/share/fnm/aliases/default/bin:$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
 install_loopback_node_exporter
+
+verify_resolved_manifest
+run_as_node env HOME="$NODE_HOME" PATH="$PATH_VALUE" PYTHONPATH="$REPO_DIR/src" \
+  "$PYTHON_BIN" -m fleet_node_observability.commands.ensure_openclaw_diagnostics_otel
 
 cat >"$TMP_DIR/collector.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -526,8 +535,6 @@ cat >"$TMP_DIR/gateway.plist" <<PLIST
 PLIST
 install -o root -g wheel -m 0644 "$TMP_DIR/gateway.plist" "$GATEWAY_PLIST"
 
-PYTHONPATH_VALUE="$RUNTIME_PYTHON"
-PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:$NODE_HOME/.local/share/fnm/aliases/default/bin:$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 THERMAL_SCRIPT="$RUNTIME_PYTHON/fleet_node_observability/commands/collect_macos_thermal.py"
 THERMAL_TEXTFILE="$TEXTFILE_DIR/macos_thermal.prom"
 cat >"$TMP_DIR/thermal.plist" <<PLIST
