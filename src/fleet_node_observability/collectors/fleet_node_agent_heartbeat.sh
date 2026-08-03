@@ -81,12 +81,12 @@ if [[ -n "$METRICS" ]]; then
       }
       /^otelcol_exporter_queue_size\{/ {
         exporter = ""
-        if (index($0, "exporter=\"otlphttp/logs\"")) exporter = "logs"
-        else if (index($0, "exporter=\"otlphttp/traces\"")) exporter = "traces"
-        else if (index($0, "exporter=\"otlphttp/app_metrics\"")) exporter = "app_metrics"
-        else if (index($0, "exporter=\"otlphttp/agent\"")) exporter = "agent"
-        else if (index($0, "exporter=\"otlphttp/host\"")) exporter = "host"
-        else if (index($0, "exporter=\"otlphttp/heartbeat\"")) exporter = "heartbeat"
+        if (index($0, "exporter=\"otlp_http/logs\"")) exporter = "logs"
+        else if (index($0, "exporter=\"otlp_http/traces\"")) exporter = "traces"
+        else if (index($0, "exporter=\"otlp_http/app_metrics\"")) exporter = "app_metrics"
+        else if (index($0, "exporter=\"otlp_http/agent\"")) exporter = "agent"
+        else if (index($0, "exporter=\"otlp_http/host\"")) exporter = "host"
+        else if (index($0, "exporter=\"otlp_http/heartbeat\"")) exporter = "heartbeat"
         if (exporter == "") next
         value = $NF
         if (!valid_queue_size(value)) {

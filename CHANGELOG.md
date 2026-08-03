@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 - 2026-08-02
+
+- Disabled node_exporter's noisy native macOS thermal collector because the dedicated `pmset`
+  textfile collector provides the supported thermal metrics.
+- Replaced the deprecated Collector `otlphttp` component alias with `otlp_http` and made release
+  checksum sidecars portable across machines.
+
 ## 0.2.1 - 2026-08-02
 
 - Fixed release installation permissions so the unprivileged node service account can traverse the

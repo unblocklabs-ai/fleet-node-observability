@@ -73,13 +73,13 @@ class AgentHeartbeatTest(unittest.TestCase):
                 "AWK_CAPTURE": str(awk_capture),
             }
             metrics.write_text(
-                'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs",partition="a"} 80\n'
-                'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs",partition="b"} 48\n'
-                'otelcol_exporter_queue_size{data_type="traces",exporter="otlphttp/traces"} 6.4e1\n'
-                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/app_metrics"} 32\n'
-                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/agent"} 16\n'
-                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/host"} 8\n'
-                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/heartbeat"} 4\n',
+                'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs",partition="a"} 80\n'
+                'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs",partition="b"} 48\n'
+                'otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/traces"} 6.4e1\n'
+                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/app_metrics"} 32\n'
+                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/agent"} 16\n'
+                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/host"} 8\n'
+                'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/heartbeat"} 4\n',
                 encoding="utf-8",
             )
             state_dir = root / "state"
@@ -113,12 +113,12 @@ class AgentHeartbeatTest(unittest.TestCase):
             metrics.write_text(
                 '\n'.join(
                     [
-                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs"} 0',
-                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlphttp/traces"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/app_metrics"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/agent"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/host"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/heartbeat"} 0',
+                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 0',
+                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/traces"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/app_metrics"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/agent"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/host"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/heartbeat"} 0',
                     ]
                 )
                 + "\n",
@@ -172,11 +172,11 @@ class AgentHeartbeatTest(unittest.TestCase):
             metrics.write_text(
                 '\n'.join(
                     [
-                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs"} 0',
-                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlphttp/traces"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/app_metrics"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/agent"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/host"} 0',
+                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 0',
+                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/traces"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/app_metrics"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/agent"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/host"} 0',
                     ]
                 )
                 + "\n",
@@ -227,13 +227,13 @@ class AgentHeartbeatTest(unittest.TestCase):
             metrics.write_text(
                 '\n'.join(
                     [
-                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs",sample="valid"} 0',
-                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs",sample="invalid"} NaN',
-                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlphttp/traces"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/app_metrics"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/agent"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/host"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/heartbeat"} 0',
+                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs",sample="valid"} 0',
+                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs",sample="invalid"} NaN',
+                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/traces"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/app_metrics"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/agent"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/host"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/heartbeat"} 0',
                     ]
                 )
                 + "\n",
@@ -279,12 +279,12 @@ class AgentHeartbeatTest(unittest.TestCase):
             metrics.write_text(
                 '\n'.join(
                     [
-                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlphttp/logs"} 0.4',
-                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlphttp/traces"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/app_metrics"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/agent"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/host"} 0',
-                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlphttp/heartbeat"} 0',
+                        'otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 0.4',
+                        'otelcol_exporter_queue_size{data_type="traces",exporter="otlp_http/traces"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/app_metrics"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/agent"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/host"} 0',
+                        'otelcol_exporter_queue_size{data_type="metrics",exporter="otlp_http/heartbeat"} 0',
                     ]
                 )
                 + "\n",

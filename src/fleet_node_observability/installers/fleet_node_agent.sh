@@ -445,6 +445,7 @@ install_loopback_node_exporter() {
   <key>ProgramArguments</key><array>
     <string>$(escape_xml "$node_exporter_bin")</string>
     <string>--web.listen-address=127.0.0.1:9100</string>
+    <string>--no-collector.thermal</string>
     <string>--collector.textfile.directory=$(escape_xml "$TEXTFILE_DIR")</string>
   </array>
   <key>RunAtLoad</key><true/>

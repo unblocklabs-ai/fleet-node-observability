@@ -278,9 +278,9 @@ class AgentConfigTest(unittest.TestCase):
             rendered["processors"]["filter/heartbeat"]["metrics"]["metric"],
             [f'name != "{HEARTBEAT_METRIC}"'],
         )
-        self.assertEqual(host["exporters"], ["otlphttp/host"])
+        self.assertEqual(host["exporters"], ["otlp_http/host"])
         self.assertEqual(
-            heartbeat["exporters"], ["otlphttp/heartbeat"]
+            heartbeat["exporters"], ["otlp_http/heartbeat"]
         )
 
     def test_config_is_secret_free_and_openclaw_is_loopback_only(self) -> None:

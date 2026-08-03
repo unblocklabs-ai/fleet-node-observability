@@ -487,16 +487,16 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     }
 
     exporters: dict[str, Any] = {
-        "otlphttp/logs": _exporter(
+        "otlp_http/logs": _exporter(
             config, queue_bytes=96 * 1024 * 1024, request_bytes=1024 * 1024, retry_max_elapsed="24h"
         ),
-        "otlphttp/traces": _exporter(
+        "otlp_http/traces": _exporter(
             config, queue_bytes=48 * 1024 * 1024, request_bytes=1024 * 1024, retry_max_elapsed="12h"
         ),
-        "otlphttp/app_metrics": _exporter(
+        "otlp_http/app_metrics": _exporter(
             config, queue_bytes=32 * 1024 * 1024, request_bytes=512 * 1024, retry_max_elapsed="6h"
         ),
-        "otlphttp/agent": _exporter(
+        "otlp_http/agent": _exporter(
             config, queue_bytes=16 * 1024 * 1024, request_bytes=256 * 1024, retry_max_elapsed="30m"
         ),
     }
@@ -510,22 +510,22 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
                 "filter/routine_openclaw_logs",
                 "batch/logs",
             ],
-            "exporters": ["otlphttp/logs"],
+            "exporters": ["otlp_http/logs"],
         },
         "traces/openclaw": {
             "receivers": ["otlp/openclaw"],
             "processors": ["memory_limiter", "resource/openclaw", "batch/traces"],
-            "exporters": ["otlphttp/traces"],
+            "exporters": ["otlp_http/traces"],
         },
         "metrics/openclaw": {
             "receivers": ["otlp/openclaw"],
             "processors": ["memory_limiter", "resource/openclaw", "batch/app_metrics"],
-            "exporters": ["otlphttp/app_metrics"],
+            "exporters": ["otlp_http/app_metrics"],
         },
         "metrics/agent": {
             "receivers": ["prometheus/agent"],
             "processors": ["memory_limiter", "resource/agent", "batch/agent"],
-            "exporters": ["otlphttp/agent"],
+            "exporters": ["otlp_http/agent"],
         },
     }
 
@@ -562,10 +562,10 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
     )
     exporters.update(
         {
-            "otlphttp/host": _exporter(
+            "otlp_http/host": _exporter(
                 config, queue_bytes=48 * 1024 * 1024, request_bytes=512 * 1024, retry_max_elapsed="6h"
             ),
-            "otlphttp/heartbeat": _exporter(
+            "otlp_http/heartbeat": _exporter(
                 config, queue_bytes=8 * 1024 * 1024, request_bytes=64 * 1024, retry_max_elapsed="5m"
             ),
         }
@@ -580,7 +580,7 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
                     "resource/host",
                     "batch/host",
                 ],
-                "exporters": ["otlphttp/host"],
+                "exporters": ["otlp_http/host"],
             },
             "metrics/heartbeat": {
                 "receivers": ["prometheus/node_exporter"],
@@ -590,7 +590,7 @@ def render_collector_config(config: AgentConfig) -> dict[str, Any]:
                     "resource/heartbeat",
                     "batch/heartbeat",
                 ],
-                "exporters": ["otlphttp/heartbeat"],
+                "exporters": ["otlp_http/heartbeat"],
             },
         }
     )

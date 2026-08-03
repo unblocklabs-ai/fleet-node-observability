@@ -290,12 +290,12 @@ class CollectorRuntimeIntegrationTest(unittest.TestCase):
                     "scrape_timeout": "100ms",
                 }
                 file_names = {
-                    "otlphttp/logs": "logs.json",
-                    "otlphttp/traces": "traces.json",
-                    "otlphttp/app_metrics": "app-metrics.json",
-                    "otlphttp/agent": "agent.json",
-                    "otlphttp/host": "host.json",
-                    "otlphttp/heartbeat": "heartbeat.json",
+                    "otlp_http/logs": "logs.json",
+                    "otlp_http/traces": "traces.json",
+                    "otlp_http/app_metrics": "app-metrics.json",
+                    "otlp_http/agent": "agent.json",
+                    "otlp_http/host": "host.json",
+                    "otlp_http/heartbeat": "heartbeat.json",
                 }
                 rendered["exporters"] = {
                     f"file/{name.removesuffix('.json')}": {"path": f"/output/{name}"}

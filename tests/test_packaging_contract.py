@@ -47,6 +47,11 @@ class PackagingContractTests(unittest.TestCase):
             )
             self.assertFalse(any("__pycache__" in name or name.endswith(".pyc") for name in names))
 
+            checksum = tarball.with_name(f"fleet-node-observability-{VERSION}.sha256")
+            checksum_parts = checksum.read_text(encoding="utf-8").split()
+            self.assertEqual(checksum_parts[1], tarball.name)
+            self.assertFalse(Path(checksum_parts[1]).is_absolute())
+
     def test_install_from_release_rejects_multi_root_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)

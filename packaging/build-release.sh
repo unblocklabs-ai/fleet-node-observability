@@ -106,10 +106,11 @@ find "${STAGING}" \( -name '__pycache__' -type d -o -name '*.pyc' -type f \) -pr
 tar -C "${TMP_ROOT}" -czf "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" "${ARTIFACT_NAME}"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  sha256sum "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" > "${OUTPUT_DIR}/${ARTIFACT_NAME}.sha256"
+  archive_sha256="$(sha256sum "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" | awk '{print $1}')"
 else
-  shasum -a 256 "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" > "${OUTPUT_DIR}/${ARTIFACT_NAME}.sha256"
+  archive_sha256="$(shasum -a 256 "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" | awk '{print $1}')"
 fi
+printf '%s  %s\n' "$archive_sha256" "${ARTIFACT_NAME}.tar.gz" > "${OUTPUT_DIR}/${ARTIFACT_NAME}.sha256"
 
 cat <<EOF
 Built:

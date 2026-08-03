@@ -160,6 +160,7 @@ class AgentInstallerContractTest(unittest.TestCase):
         ]:
             self.assertIn(label, self.installer)
         self.assertIn('--web.listen-address=127.0.0.1:9100', self.installer)
+        self.assertIn('--no-collector.thermal', self.installer)
         self.assertIn('if [[ "$CODEX_USAGE_ENABLED" == "True" ]]', self.installer)
         self.assertIn('rm -f "$CODEX_PLIST"', self.installer)
 
