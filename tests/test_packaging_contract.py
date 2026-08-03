@@ -6,7 +6,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +33,10 @@ class PackagingContractTests(unittest.TestCase):
             with tarfile.open(tarball) as archive:
                 names = archive.getnames()
 
+            self.assertEqual(
+                {PurePosixPath(name).parts[0] for name in names},
+                {f"fleet-node-observability-{VERSION}"},
+            )
             for required in [
                 "bin/install-fleet-node-agent",
                 "examples/node-agent.example.json",

@@ -6,6 +6,7 @@
   textfile collector provides the supported thermal metrics.
 - Replaced the deprecated Collector `otlphttp` component alias with `otlp_http` and made release
   checksum sidecars portable across machines.
+- Suppressed macOS AppleDouble metadata so release archives contain exactly one package root.
 
 ## 0.2.1 - 2026-08-02
 

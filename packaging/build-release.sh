@@ -103,7 +103,7 @@ fi
 
 find "${STAGING}" \( -name '__pycache__' -type d -o -name '*.pyc' -type f \) -prune -exec rm -rf {} +
 
-tar -C "${TMP_ROOT}" -czf "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" "${ARTIFACT_NAME}"
+COPYFILE_DISABLE=1 tar -C "${TMP_ROOT}" -czf "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" "${ARTIFACT_NAME}"
 
 if command -v sha256sum >/dev/null 2>&1; then
   archive_sha256="$(sha256sum "${OUTPUT_DIR}/${ARTIFACT_NAME}.tar.gz" | awk '{print $1}')"
