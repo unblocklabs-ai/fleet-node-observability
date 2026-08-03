@@ -133,7 +133,8 @@ class AgentInstallerContractTest(unittest.TestCase):
         self.assertIn('RUNTIME_PYTHON="$RUNTIME_DIR/python"', self.installer)
         self.assertIn(
             'PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:'
-            '$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
+            '$NODE_HOME/.local/share/fnm/aliases/default/bin:$HOMEBREW_PREFIX/bin:'
+            '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
             self.installer,
         )
         self.assertIn('$RUNTIME_BIN/openclaw-gateway-health', self.installer)

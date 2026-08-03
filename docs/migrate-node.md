@@ -58,7 +58,7 @@ Also inspect the scheduled gateway-health, thermal, and, when enabled, Codex usa
 scheduled one-shot service may be stopped between intervals; a fresh successful metric is the
 relevant evidence. If Codex usage is enabled, confirm the generated metric reports
 `error_type="none"`. Its LaunchDaemon PATH includes Homebrew plus the managed account's
-`~/.npm-global/bin` and `~/.local/bin` locations.
+`~/.npm-global/bin`, `~/.local/bin`, and FNM default-runtime locations.
 
 ## 5. Verify Charizard and activate
 

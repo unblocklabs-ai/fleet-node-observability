@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.4 - 2026-08-03
+
+- Added FNM's stable default Node runtime directory to scheduled collector PATH resolution so
+  npm-installed Codex works on nodes whose `node` executable is managed by FNM.
+
 ## 0.2.3 - 2026-08-03
 
 - Added the managed node account's npm-global and local binary directories to scheduled collector
