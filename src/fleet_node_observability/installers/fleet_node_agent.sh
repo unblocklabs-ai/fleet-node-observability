@@ -527,7 +527,7 @@ PLIST
 install -o root -g wheel -m 0644 "$TMP_DIR/gateway.plist" "$GATEWAY_PLIST"
 
 PYTHONPATH_VALUE="$RUNTIME_PYTHON"
-PATH_VALUE="$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 THERMAL_SCRIPT="$RUNTIME_PYTHON/fleet_node_observability/commands/collect_macos_thermal.py"
 THERMAL_TEXTFILE="$TEXTFILE_DIR/macos_thermal.prom"
 cat >"$TMP_DIR/thermal.plist" <<PLIST

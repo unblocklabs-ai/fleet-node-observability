@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.3 - 2026-08-03
+
+- Added the managed node account's npm-global and local binary directories to scheduled collector
+  PATH resolution so Codex usage collection works when Codex is installed outside Homebrew.
+- Documented the proven one-node-at-a-time migration, legacy cleanup, and end-to-end verification
+  procedure.
+
 ## 0.2.2 - 2026-08-02
 
 - Disabled node_exporter's noisy native macOS thermal collector because the dedicated `pmset`

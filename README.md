@@ -132,5 +132,6 @@ Build release evidence outside the repository's existing `dist/` directory:
 ./packaging/build-release.sh --output "$(mktemp -d)"
 ```
 
-See [central contract](docs/central-contract.md), [OpenClaw configuration](docs/openclaw-otel.md),
+See the [node migration runbook](docs/migrate-node.md),
+[central contract](docs/central-contract.md), [OpenClaw configuration](docs/openclaw-otel.md),
 [textfile metrics](docs/textfile-metrics.md), and [troubleshooting](docs/troubleshooting.md).

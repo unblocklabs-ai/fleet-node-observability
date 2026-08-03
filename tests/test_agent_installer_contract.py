@@ -131,6 +131,11 @@ class AgentInstallerContractTest(unittest.TestCase):
 
     def test_scheduled_collectors_use_stable_installed_runtime(self) -> None:
         self.assertIn('RUNTIME_PYTHON="$RUNTIME_DIR/python"', self.installer)
+        self.assertIn(
+            'PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:'
+            '$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
+            self.installer,
+        )
         self.assertIn('$RUNTIME_BIN/openclaw-gateway-health', self.installer)
         self.assertIn(
             '$RUNTIME_PYTHON/fleet_node_observability/commands/collect_macos_thermal.py',
