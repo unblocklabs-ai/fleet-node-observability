@@ -41,7 +41,9 @@ sudo /usr/local/fleet-node-observability/bin/install-fleet-node-agent \
 
 Delete the rollout copy of the token immediately after a successful install. Review the timestamped
 OpenClaw configuration backup, confirm its OTLP endpoint is `http://127.0.0.1:4318` with empty
-headers, then restart the OpenClaw gateway.
+headers, then restart the OpenClaw gateway. When the restart runs through non-login SSH, supply an
+explicit PATH containing the managed account's npm-global, local-bin, FNM default-runtime,
+Homebrew, and system directories; do not assume shell startup files resolved `node`.
 
 ## 4. Verify the node
 
