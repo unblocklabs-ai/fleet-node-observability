@@ -424,7 +424,7 @@ ensure_node_exporter_installed() {
     return
   fi
   sudo -u "$NODE_USER" env \
-    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 \
+    HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1 \
     "$BREW_BIN" install node_exporter
   if ! find_node_exporter >/dev/null; then
     echo "Homebrew did not install node_exporter under $HOMEBREW_PREFIX" >&2

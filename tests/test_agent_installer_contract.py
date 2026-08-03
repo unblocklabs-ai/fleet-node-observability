@@ -83,7 +83,7 @@ class AgentInstallerContractTest(unittest.TestCase):
             'x86_64) ARCHITECTURE="x86_64"; PLATFORM="darwin_amd64"',
             "select_homebrew()",
             'HOMEBREW_PREFIX="$(select_homebrew)"',
-            'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1',
+            'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1 HOMEBREW_NO_INSTALL_CLEANUP=1',
             '"$BREW_BIN" install node_exporter',
         ]:
             self.assertIn(required, self.installer)

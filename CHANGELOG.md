@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Disabled Homebrew's automatic post-install cleanup while installing a missing node_exporter so
+  fleet setup does not remove unrelated cached packages or produce unrelated cleanup warnings.
+
 ## 0.2.5 - 2026-08-03
 
 - Ensured the official `diagnostics-otel` OpenClaw extension is installed, pinned to the matching
