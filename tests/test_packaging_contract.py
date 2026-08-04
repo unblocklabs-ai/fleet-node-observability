@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
 
-
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
@@ -39,9 +38,11 @@ class PackagingContractTests(unittest.TestCase):
             )
             for required in [
                 "bin/install-fleet-node-agent",
+                "bin/collect-openclaw-cron-schedule",
                 "examples/node-agent.example.json",
                 "src/fleet_node_observability/agent.py",
                 "src/fleet_node_observability/atomic.py",
+                "src/fleet_node_observability/commands/collect_openclaw_cron_schedule.py",
                 "src/fleet_node_observability/openclaw.py",
             ]:
                 self.assertIn(f"fleet-node-observability-{VERSION}/{required}", names)

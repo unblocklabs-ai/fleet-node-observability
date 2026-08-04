@@ -42,7 +42,8 @@ The node always exports:
 
 - OpenClaw logs, traces, and metrics received over loopback OTLP/HTTP;
 - host and textfile metrics scraped from loopback node_exporter;
-- Collector self-metrics; and
+- Collector self-metrics;
+- a bounded local OpenClaw cron schedule snapshot; and
 - an occurrence-timestamp heartbeat with queue health.
 
 Raw logs received from OpenClaw are subject only to two low-severity structured routine-success

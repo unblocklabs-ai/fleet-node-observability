@@ -15,6 +15,11 @@ authenticated OTLP/HTTP connection.
   seconds.
 - macOS thermal metrics report pressure availability, level, collection success, collection time,
   and a bounded error label every 60 seconds.
+- OpenClaw cron schedule collection runs locally every five minutes. It exports collector
+  freshness, enabled/disabled totals, counts grouped by identical schedule, and bounded per-job
+  identity, next-run, latest-duration, running, normalized status, and consecutive-error fields. It
+  never exports job payloads, trigger commands, or error messages. This replaces the former
+  cross-node `cron_pressure.prom` snapshot.
 
 ## Capability-gated
 

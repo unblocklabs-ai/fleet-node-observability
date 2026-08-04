@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Nothing yet.
+
+## 0.3.0 - 2026-08-04
+
+- Added a five-minute node-local OpenClaw cron schedule collector with bounded schedule, identity,
+  execution-state, and freshness metrics for the node-scoped Grafana dashboard.
+- Excluded cron commands, payloads, arbitrary status text, and raw error messages from telemetry;
+  stale legacy `cron_pressure.prom` snapshots are removed during installation.
+- Added non-interactive Node runtime discovery for nvm, Volta, asdf, and mise alongside the existing
+  Homebrew and FNM paths so LaunchDaemons can invoke the OpenClaw CLI consistently.
 - Disabled Homebrew's automatic post-install cleanup while installing a missing node_exporter so
   fleet setup does not remove unrelated cached packages or produce unrelated cleanup warnings.
 

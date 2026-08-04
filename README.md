@@ -15,8 +15,8 @@ Every node runs the same local services:
   node_exporter and its own metrics, batches and queues each signal, and sends authenticated
   OTLP/HTTP to one canonical HTTPS endpoint.
 - node_exporter listens only on `127.0.0.1:9100` and includes local textfile metrics.
-- Scheduled producers emit agent heartbeat, OpenClaw readiness, and macOS thermal metrics. Codex
-  usage collection is enabled per node.
+- Scheduled producers emit agent heartbeat, OpenClaw readiness, macOS thermal metrics, and a
+  bounded node-local OpenClaw cron schedule snapshot. Codex usage collection is enabled per node.
 
 Only the Collector makes network requests to Charizard. Physical network location does not change
 the node code, protocol, credential, or service layout.

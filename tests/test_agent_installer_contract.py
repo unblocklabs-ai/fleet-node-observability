@@ -134,7 +134,8 @@ class AgentInstallerContractTest(unittest.TestCase):
         self.assertIn('RUNTIME_PYTHON="$RUNTIME_DIR/python"', self.installer)
         self.assertIn(
             'PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:'
-            '$NODE_HOME/.local/share/fnm/aliases/default/bin:$HOMEBREW_PREFIX/bin:'
+            '$NODE_HOME/.local/share/fnm/aliases/default/bin:$NODE_HOME/.volta/bin:'
+            '$NODE_HOME/.asdf/shims:$NODE_HOME/.local/share/mise/shims:$HOMEBREW_PREFIX/bin:'
             '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"',
             self.installer,
         )
@@ -145,6 +146,10 @@ class AgentInstallerContractTest(unittest.TestCase):
         )
         self.assertIn(
             '$RUNTIME_PYTHON/fleet_node_observability/commands/collect_codex_usage.py',
+            self.installer,
+        )
+        self.assertIn(
+            '$RUNTIME_PYTHON/fleet_node_observability/commands/collect_openclaw_cron_schedule.py',
             self.installer,
         )
         self.assertIn('configure_openclaw_local_otel.py; do', self.installer)
@@ -168,12 +173,16 @@ class AgentInstallerContractTest(unittest.TestCase):
             "com.unblocklabs.openclaw-gateway-health-textfile",
             "com.unblocklabs.macos-thermal-textfile",
             "com.unblocklabs.codex-usage-textfile",
+            "com.unblocklabs.openclaw-cron-schedule-textfile",
         ]:
             self.assertIn(label, self.installer)
         self.assertIn('--web.listen-address=127.0.0.1:9100', self.installer)
         self.assertIn('--no-collector.thermal', self.installer)
+        self.assertIn('$NODE_HOME"/.nvm/versions/node/*/bin', self.installer)
+        self.assertIn('$NODE_HOME/.volta/bin', self.installer)
         self.assertIn('if [[ "$CODEX_USAGE_ENABLED" == "True" ]]', self.installer)
         self.assertIn('rm -f "$CODEX_PLIST"', self.installer)
+        self.assertIn('rm -f "$TEXTFILE_DIR/cron_pressure.prom"', self.installer)
 
     def test_health_and_sources_are_proved_before_openclaw_rewrite(self) -> None:
         health = self.installer.index("fleet-node-agent did not become healthy")

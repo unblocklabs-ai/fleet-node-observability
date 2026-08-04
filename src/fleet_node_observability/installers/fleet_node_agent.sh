@@ -379,6 +379,7 @@ run_as_node install -m 0644 \
 for runtime_command in \
   collect_codex_usage.py \
   collect_macos_thermal.py \
+  collect_openclaw_cron_schedule.py \
   configure_openclaw_local_otel.py; do
   run_as_node install -m 0644 \
     "$REPO_DIR/src/fleet_node_observability/commands/$runtime_command" \
@@ -412,6 +413,8 @@ THERMAL_LABEL="com.unblocklabs.macos-thermal-textfile"
 THERMAL_PLIST="/Library/LaunchDaemons/$THERMAL_LABEL.plist"
 CODEX_LABEL="com.unblocklabs.codex-usage-textfile"
 CODEX_PLIST="/Library/LaunchDaemons/$CODEX_LABEL.plist"
+CRON_SCHEDULE_LABEL="com.unblocklabs.openclaw-cron-schedule-textfile"
+CRON_SCHEDULE_PLIST="/Library/LaunchDaemons/$CRON_SCHEDULE_LABEL.plist"
 
 find_node_exporter() {
   local candidate="$HOMEBREW_PREFIX/bin/node_exporter"
@@ -464,7 +467,14 @@ PLIST
 }
 
 PYTHONPATH_VALUE="$RUNTIME_PYTHON"
-PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:$NODE_HOME/.local/share/fnm/aliases/default/bin:$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PATH_VALUE="$NODE_HOME/.npm-global/bin:$NODE_HOME/.local/bin:$NODE_HOME/.local/share/fnm/aliases/default/bin:$NODE_HOME/.volta/bin:$NODE_HOME/.asdf/shims:$NODE_HOME/.local/share/mise/shims:$HOMEBREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+# LaunchDaemons do not load the user's interactive shell. Include installed nvm runtimes so CLI
+# scripts with `#!/usr/bin/env node` work on nodes whose Node installation is not Homebrew-managed.
+for node_runtime_bin in "$NODE_HOME"/.nvm/versions/node/*/bin; do
+  if [[ -d "$node_runtime_bin" ]]; then
+    PATH_VALUE="$node_runtime_bin:$PATH_VALUE"
+  fi
+done
 
 install_loopback_node_exporter
 
@@ -562,6 +572,36 @@ cat >"$TMP_DIR/thermal.plist" <<PLIST
 PLIST
 install -o root -g wheel -m 0644 "$TMP_DIR/thermal.plist" "$THERMAL_PLIST"
 
+CRON_SCHEDULE_SCRIPT="$RUNTIME_PYTHON/fleet_node_observability/commands/collect_openclaw_cron_schedule.py"
+CRON_SCHEDULE_TEXTFILE="$TEXTFILE_DIR/openclaw_cron_schedule.prom"
+cat >"$TMP_DIR/cron-schedule.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$CRON_SCHEDULE_LABEL</string>
+  <key>UserName</key><string>$(escape_xml "$NODE_USER")</string>
+  <key>ProgramArguments</key><array>
+    <string>$(escape_xml "$PYTHON_BIN")</string>
+    <string>$(escape_xml "$CRON_SCHEDULE_SCRIPT")</string>
+    <string>--node</string><string>$(escape_xml "$NODE_LABEL")</string>
+    <string>--output</string><string>$(escape_xml "$CRON_SCHEDULE_TEXTFILE")</string>
+  </array>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOME</key><string>$(escape_xml "$NODE_HOME")</string>
+    <key>PATH</key><string>$(escape_xml "$PATH_VALUE")</string>
+    <key>PYTHONPATH</key><string>$(escape_xml "$PYTHONPATH_VALUE")</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>$(escape_xml "$RUNTIME_LOGS/cron-schedule.log")</string>
+  <key>StandardErrorPath</key><string>$(escape_xml "$RUNTIME_LOGS/cron-schedule.err.log")</string>
+</dict></plist>
+PLIST
+install -o root -g wheel -m 0644 "$TMP_DIR/cron-schedule.plist" "$CRON_SCHEDULE_PLIST"
+# The former cross-node pressure poller is not part of the node-owned contract. Remove its stale
+# textfile so node_exporter cannot keep presenting old snapshots as current samples.
+run_as_node rm -f "$TEXTFILE_DIR/cron_pressure.prom" "$TEXTFILE_DIR/cron_pressure.prom".*.tmp
+
 CODEX_SCRIPT="$RUNTIME_PYTHON/fleet_node_observability/commands/collect_codex_usage.py"
 CODEX_TEXTFILE="$TEXTFILE_DIR/codex_usage.prom"
 if [[ "$CODEX_USAGE_ENABLED" == "True" ]]; then
@@ -608,6 +648,7 @@ restart_launchdaemon "$COLLECTOR_LABEL" "$COLLECTOR_PLIST"
 restart_launchdaemon "$HEARTBEAT_LABEL" "$HEARTBEAT_PLIST"
 restart_launchdaemon "$GATEWAY_LABEL" "$GATEWAY_PLIST"
 restart_launchdaemon "$THERMAL_LABEL" "$THERMAL_PLIST"
+restart_launchdaemon "$CRON_SCHEDULE_LABEL" "$CRON_SCHEDULE_PLIST"
 if [[ "$CODEX_USAGE_ENABLED" == "True" ]]; then
   restart_launchdaemon "$CODEX_LABEL" "$CODEX_PLIST"
 fi
