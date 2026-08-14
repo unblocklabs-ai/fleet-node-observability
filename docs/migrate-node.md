@@ -1,5 +1,9 @@
 # Node migration runbook
 
+This runbook is only for replacing legacy telemetry on an existing managed
+node. For a brand-new fleet member, use the central
+[new-node runbook](https://github.com/unblocklabs-ai/fleet-observability/blob/main/docs/add-node.md).
+
 Migrate one node at a time. Keep it in central maintenance until the new runtime is healthy and
 Charizard has received current telemetry from it. A temporary logging gap is acceptable; the old
 pull-based services are not retained as a fallback.

@@ -41,6 +41,18 @@ provisioned before installation. The installer discovers machine-specific
 details such as the node home directory, architecture, Homebrew prefix, and
 runtime paths.
 
+## Adding a new node
+
+The central `fleet-observability` repository owns fleet identity, credential
+issuance, configuration rendering, activation, and end-to-end verification.
+Follow its
+[new-node runbook](https://github.com/unblocklabs-ai/fleet-observability/blob/main/docs/add-node.md)
+before using the installer below.
+
+This repository begins at the node-local installation boundary: it consumes the
+rendered node configuration and protected ingest token produced by the central
+workflow.
+
 ## Installation
 
 Install a checksummed release:
