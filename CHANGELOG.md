@@ -4,6 +4,13 @@
 
 - Nothing yet.
 
+## 0.3.5 - 2026-09-18
+
+- Publish latest cron attempt and active-run start timestamps; omit unavailable
+  values instead of implying epoch zero.
+- Preserve millisecond precision in next-run timestamps instead of rounding by
+  minutes at current Unix times.
+
 ## 0.3.4 - 2026-09-18
 
 - Run the OpenClaw cron CLI from the managed user's home directory so scheduled
