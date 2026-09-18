@@ -107,11 +107,13 @@ class OpenClawCronScheduleCollectorTests(unittest.TestCase):
         )
         with (
             mock.patch.object(collector.shutil, "which", return_value="/bin/openclaw"),
+            mock.patch.object(collector.Path, "home", return_value=Path("/Users/managed-node")),
             mock.patch.object(collector.subprocess, "run", return_value=completed) as run,
         ):
             self.assertEqual(collector.collect_jobs(timeout=1), [])
         run.assert_called_once_with(
             ["/bin/openclaw", "cron", "list", "--all", "--json"],
+            cwd=Path("/Users/managed-node"),
             capture_output=True,
             text=True,
             check=False,
