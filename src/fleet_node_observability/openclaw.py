@@ -126,10 +126,12 @@ def apply_loopback_diagnostics(payload: dict, *, endpoint: str) -> dict:
             "metrics": True,
             "logs": True,
             "logsExporter": "otlp",
-            "captureContent": False,
             "headers": {},
         }
     )
+    # Content capture is an operator privacy choice, not a transport setting.
+    # Preserve explicit approval across reinstall; new nodes remain opt-in.
+    otel.setdefault("captureContent", False)
     return payload
 
 

@@ -15,7 +15,7 @@ from fleet_node_observability.openclaw import (
 
 
 class OpenClawConfigTest(unittest.TestCase):
-    def test_loopback_settings_replace_headers_and_disable_content_capture(self) -> None:
+    def test_loopback_settings_replace_headers_and_default_content_capture_off(self) -> None:
         payload = {
             "unrelated": True,
             "diagnostics": {
@@ -43,6 +43,14 @@ class OpenClawConfigTest(unittest.TestCase):
         self.assertEqual(otel["logsExporter"], "otlp")
         for old_endpoint in ("tracesEndpoint", "metricsEndpoint", "logsEndpoint"):
             self.assertNotIn(old_endpoint, otel)
+
+    def test_reconfiguration_preserves_explicit_content_capture_choice(self) -> None:
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                payload = {"diagnostics": {"otel": {"captureContent": enabled}}}
+                for _ in range(2):
+                    payload = apply_loopback_diagnostics(payload, endpoint="http://127.0.0.1:4318")
+                    self.assertIs(payload["diagnostics"]["otel"]["captureContent"], enabled)
 
     def test_rejects_non_object_diagnostics(self) -> None:
         for payload in ({"diagnostics": []}, {"diagnostics": {"otel": []}}):

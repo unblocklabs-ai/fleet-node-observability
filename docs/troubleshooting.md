@@ -40,7 +40,11 @@ queue is draining.
 ## OpenClaw
 
 Inspect `~/.openclaw/openclaw.json` and confirm the OTLP endpoint is loopback, headers are `{}`,
-`traces`, `metrics`, and `logs` are true, `logsExporter` is `otlp`, and `captureContent` is false.
+`traces`, `metrics`, and `logs` are true and `logsExporter` is `otlp`.
+`captureContent` defaults to false but preserves an explicitly approved choice;
+false produces placeholder log bodies in recent OpenClaw versions. See
+[content capture and privacy](openclaw-otel.md#meaningful-log-bodies-and-privacy)
+before enabling it.
 Signal-specific endpoint overrides must be absent. Review the timestamped backup before restarting
 OpenClaw. Collector health does not prove that OpenClaw emitted or Charizard stored logs, metrics,
 and traces.
