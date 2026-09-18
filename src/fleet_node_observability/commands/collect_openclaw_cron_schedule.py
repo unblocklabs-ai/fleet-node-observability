@@ -69,6 +69,9 @@ def collect_jobs(*, timeout: float = 20) -> list[dict[str, Any]]:
     try:
         result = subprocess.run(
             [executable, "cron", "list", "--all", "--json"],
+            # LaunchDaemons inherit /, which prevents OpenClaw's safe runtime
+            # discovery from recovering an unsupported Node earlier on PATH.
+            cwd=Path.home(),
             capture_output=True,
             text=True,
             check=False,

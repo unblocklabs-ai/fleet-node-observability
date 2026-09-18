@@ -4,6 +4,12 @@
 
 - Nothing yet.
 
+## 0.3.4 - 2026-09-18
+
+- Run the OpenClaw cron CLI from the managed user's home directory so scheduled
+  collection can discover a compatible Node runtime instead of failing from
+  launchd's root working directory when an older Node comes first on PATH.
+
 ## 0.3.3 - 2026-09-18
 
 - Restore usage collection on newer Codex CLIs with the supported never-approval
