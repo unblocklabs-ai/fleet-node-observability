@@ -4,6 +4,12 @@
 
 - Nothing yet.
 
+## 0.3.1 - 2026-09-18
+
+- Preserve the operator's explicit OpenClaw content-capture setting during
+  reconfiguration instead of silently disabling meaningful log bodies. New nodes
+  still default to capture off; document its model/tool-content privacy implications.
+
 ## 0.3.0 - 2026-08-04
 
 - Added a five-minute node-local OpenClaw cron schedule collector with bounded schedule, identity,
