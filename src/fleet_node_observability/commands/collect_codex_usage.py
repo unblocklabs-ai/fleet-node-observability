@@ -120,7 +120,9 @@ class JsonLineReader:
                 break
             chunk = os.read(self.fd, 4096)
             if not chunk:
-                break
+                raise CollectionError(
+                    "app_server_connection_failed", "Codex app-server closed its output"
+                )
             self.buffer += chunk.decode("utf-8", errors="replace")
 
         raise CollectionError(
@@ -151,7 +153,12 @@ def rpc_request(
     process.stdin.flush()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        message = reader.read(max(0.1, deadline - time.monotonic()))
+        try:
+            message = reader.read(max(0.01, deadline - time.monotonic()))
+        except CollectionError as exc:
+            raise CollectionError(
+                exc.error_type, f"Codex app-server method {method}: {exc}"
+            ) from exc
         if message.get("id") != request_id:
             continue
         if isinstance(message.get("error"), dict):
@@ -179,7 +186,7 @@ def fetch_app_server_usage(timeout: float) -> dict[str, Any]:
         raise CollectionError("app_server_missing", "codex executable not found on PATH")
     try:
         process = subprocess.Popen(
-            [codex, "-s", "read-only", "-a", "untrusted", "app-server"],
+            [codex, "-s", "read-only", "-a", "never", "app-server"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -267,7 +274,10 @@ def parse_app_server_window(window: dict[str, Any] | None) -> dict[str, float] |
 def snapshot_from_app_server(
     limits_payload: dict[str, Any], account_payload: dict[str, Any]
 ) -> dict[str, Any]:
-    rate_limits = limits_payload.get("rateLimits")
+    by_limit = limits_payload.get("rateLimitsByLimitId")
+    rate_limits = by_limit.get("codex") if isinstance(by_limit, dict) else None
+    if not isinstance(rate_limits, dict):
+        rate_limits = limits_payload.get("rateLimits")
     if not isinstance(rate_limits, dict):
         rate_limits = limits_payload
     account = account_payload.get("account")
@@ -293,7 +303,6 @@ def snapshot_from_app_server(
             "unlimited": bool_metric(credits.get("unlimited")),
             "balance": as_float(credits.get("balance")),
         },
-        "snapshot_age_seconds": 0.0,
     }
     if snapshot["primary"] is None and snapshot["secondary"] is None and not any(
         value is not None for value in snapshot["credits"].values()
@@ -347,7 +356,6 @@ def build_output(
         "collector_success": 1.0 if success else 0.0,
         "collected_at": iso_now(),
         "collected_at_seconds": float(now_seconds()),
-        "snapshot_age_seconds": as_float(snapshot.get("snapshot_age_seconds")) or 0.0,
         "account_domain": clean_text(snapshot.get("account_domain")),
         "account_email": clean_text(snapshot.get("account_email")),
         "plan_type": clean_text(snapshot.get("plan_type")),
@@ -379,7 +387,6 @@ def prometheus_output(payload: dict[str, Any]) -> str:
     }
     metric_map = {
         "collector_success": "codex_collector_success",
-        "snapshot_age_seconds": "codex_usage_snapshot_age_seconds",
         "collected_at_seconds": "codex_usage_collected_at_seconds",
         "primary_used_percent": "codex_usage_primary_used_percent",
         "primary_remaining_percent": "codex_usage_primary_remaining_percent",
@@ -396,8 +403,6 @@ def prometheus_output(payload: dict[str, Any]) -> str:
     help_lines = [
         "# HELP codex_collector_success Whether the latest Codex usage collection attempt succeeded.",
         "# TYPE codex_collector_success gauge",
-        "# HELP codex_usage_snapshot_age_seconds Age of the source Codex usage snapshot.",
-        "# TYPE codex_usage_snapshot_age_seconds gauge",
         "# HELP codex_usage_collected_at_seconds Unix timestamp when Codex usage was collected.",
         "# TYPE codex_usage_collected_at_seconds gauge",
     ]
@@ -437,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
         payload = build_output(
             node=args.node,
             profile=args.profile,
-            snapshot={"source": "app_server", "snapshot_age_seconds": 0.0},
+            snapshot={"source": "app_server"},
             success=False,
             error_type=exc.error_type,
             error_message=str(exc),

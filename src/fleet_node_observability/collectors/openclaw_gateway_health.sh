@@ -9,7 +9,7 @@ timeout_secs="${OPENCLAW_GATEWAY_HEALTH_TIMEOUT_SECS:-5}"
 
 usage() {
   cat <<'USAGE'
-Usage: openclaw-gateway-health [status|ready-heartbeat|prometheus] [ready_url] [node] [output_path]
+Usage: openclaw-gateway-health [status|prometheus] [ready_url] [node] [output_path]
 
 Checks the local OpenClaw readiness endpoint. In prometheus mode, emits the
 openclaw_gateway_ready textfile metric and writes it atomically when output_path
@@ -23,7 +23,7 @@ if [ "$mode" = "-h" ] || [ "$mode" = "--help" ]; then
 fi
 
 case "$mode" in
-  status|ready-heartbeat|prometheus)
+  status|prometheus)
     ;;
   *)
     printf 'invalid mode: %s\n\n' "$mode" >&2
@@ -97,6 +97,9 @@ emit_prometheus() {
   content="# HELP openclaw_gateway_ready Whether the local OpenClaw gateway readiness endpoint is healthy.
 # TYPE openclaw_gateway_ready gauge
 openclaw_gateway_ready{node=\"$(escape_label "$node")\",gateway_ready_url=\"$(escape_label "$ready_url")\"} $ready
+# HELP openclaw_gateway_check_timestamp_seconds Unix timestamp of the completed local readiness probe.
+# TYPE openclaw_gateway_check_timestamp_seconds gauge
+openclaw_gateway_check_timestamp_seconds{node=\"$(escape_label "$node")\"} $(date +%s)
 "
   if [ -n "$output_path" ]; then
     mkdir -p "$(dirname "$output_path")"
@@ -113,20 +116,12 @@ if "$curl_bin" -fsS --max-time "$timeout_secs" -o /dev/null "$ready_url" >/dev/n
     emit_prometheus "1"
     exit 0
   fi
-  if [ "$mode" = "ready-heartbeat" ]; then
-    emit "openclaw gateway ready heartbeat" "info" "none" "none" "gateway_ready_heartbeat" "true"
-  else
-    emit "openclaw gateway readiness ok" "info" "none" "none" "gateway_ready" "true"
-  fi
+  emit "openclaw gateway readiness ok" "info" "none" "none" "gateway_ready" "true"
   exit 0
 fi
 
 if [ "$mode" = "prometheus" ]; then
   emit_prometheus "0"
-  exit 0
-fi
-
-if [ "$mode" = "ready-heartbeat" ]; then
   exit 0
 fi
 

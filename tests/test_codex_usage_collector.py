@@ -66,6 +66,7 @@ import sys
 
 responses = {responses!r}
 error = {rate_limits_error!r}
+assert sys.argv[1:] == ["-s", "read-only", "-a", "never", "app-server"]
 initialize_replied = False
 initialized = False
 for raw in sys.stdin:
@@ -180,6 +181,25 @@ for raw in sys.stdin:
         self.assertEqual(raised.exception.error_type, "app_server_timeout")
         self.assertLess(time.monotonic() - started, 2.0)
 
+    def test_closed_output_is_not_reported_as_timeout(self) -> None:
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        with os.fdopen(read_fd) as stream:
+            with self.assertRaises(collector.CollectionError) as raised:
+                collector.JsonLineReader(stream).read(1)
+        self.assertEqual(raised.exception.error_type, "app_server_connection_failed")
+
+    def test_codex_bucket_takes_precedence_and_absent_window_stays_absent(self) -> None:
+        snapshot = collector.snapshot_from_app_server(
+            {"rateLimits": {"primary": {"usedPercent": 99}},
+             "rateLimitsByLimitId": {"codex": {
+                 "primary": {"usedPercent": 10, "windowDurationMins": 10080},
+                 "secondary": None}}}, {},
+        )
+        self.assertEqual(snapshot["primary"]["used_percent"], 10)
+        self.assertEqual(snapshot["primary"]["window_minutes"], 10080)
+        self.assertIsNone(snapshot["secondary"])
+
     def test_app_server_error_does_not_echo_server_message(self) -> None:
         secret_marker = "do-not-log-this-token"
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -215,6 +235,7 @@ for raw in sys.stdin:
         self.assertEqual(payload["severity"], "error")
         self.assertEqual(payload["error_type"], "app_server_missing")
         self.assertEqual(payload["source"], "app_server")
+        self.assertNotIn("snapshot_age_seconds", payload)
 
     def test_prometheus_output_preserves_dashboard_metric_names(self) -> None:
         payload = collector.build_output(

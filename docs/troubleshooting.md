@@ -1,7 +1,6 @@
 # Troubleshooting
 
-These checks inspect the final node-local runtime. Run them on the node during the later deployment
-or incident response; this code-cleanup task performs no host changes.
+Run these checks on the node to inspect its installed runtime during deployment or incident response.
 
 ## Local sources
 
