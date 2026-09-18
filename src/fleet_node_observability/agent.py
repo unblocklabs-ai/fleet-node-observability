@@ -99,28 +99,11 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
-def _absolute_path(value: str, *, key: str, node_home: Path | None = None) -> Path:
-    if value.startswith("~/"):
-        if node_home is None:
-            raise ConfigError(f"{key} cannot use ~ before node_home is resolved")
-        path = node_home / value[2:]
-    else:
-        path = Path(value)
+def _absolute_path(value: str, *, key: str) -> Path:
+    path = Path(value)
     if not path.is_absolute() or ".." in path.parts:
         raise ConfigError(f"{key} must be an absolute path without parent-directory segments")
     return path
-
-
-def _validate_host_port(value: str, *, key: str, require_loopback: bool) -> str:
-    host, separator, port_text = value.rpartition(":")
-    if not separator or not host or not port_text.isdigit():
-        raise ConfigError(f"{key} must use host:port syntax")
-    port = int(port_text)
-    if port < 1 or port > 65535:
-        raise ConfigError(f"{key} port must be between 1 and 65535")
-    if require_loopback and host not in {"127.0.0.1", "localhost", "::1", "[::1]"}:
-        raise ConfigError(f"{key} must bind to loopback")
-    return value
 
 
 def _validate_endpoint(value: str) -> str:
@@ -305,104 +288,15 @@ def load_agent_config(
             _required_string(payload, "telemetry_endpoint")
         ),
         codex_usage_enabled=codex_usage_enabled,
-        openclaw_config_path=_absolute_path(
-            str(expected_paths["openclaw_config_path"]),
-            key="openclaw_config_path",
-            node_home=resolved_node_home,
-        ),
-        node_exporter_target=_validate_host_port(
-            "127.0.0.1:9100",
-            key="node_exporter_target",
-            require_loopback=True,
-        ),
-        node_exporter_textfile_dir=_absolute_path(
-            str(expected_textfile_dir),
-            key="node_exporter_textfile_dir",
-        ),
-        collector_config_path=_absolute_path(
-            str(expected_paths["collector_config_path"]),
-            key="collector_config_path",
-        ),
-        authorization_header_path=_absolute_path(
-            str(expected_paths["authorization_header_path"]),
-            key="authorization_header_path",
-        ),
-        queue_directory=_absolute_path(
-            str(expected_paths["queue_directory"]),
-            key="queue_directory",
-        ),
-        collector_binary_path=_absolute_path(
-            str(expected_paths["collector_binary_path"]),
-            key="collector_binary_path",
-        ),
-        local_otlp_endpoint=_validate_host_port(
-            "127.0.0.1:4318",
-            key="local_otlp_endpoint",
-            require_loopback=True,
-        ),
-        collector_metrics_endpoint=_validate_host_port(
-            "127.0.0.1:8888",
-            key="collector_metrics_endpoint",
-            require_loopback=True,
-        ),
-        health_endpoint=_validate_host_port(
-            "127.0.0.1:13133",
-            key="health_endpoint",
-            require_loopback=True,
-        ),
+        openclaw_config_path=expected_paths["openclaw_config_path"],
+        node_exporter_target="127.0.0.1:9100",
+        node_exporter_textfile_dir=expected_textfile_dir,
+        collector_config_path=expected_paths["collector_config_path"],
+        authorization_header_path=expected_paths["authorization_header_path"],
+        queue_directory=expected_paths["queue_directory"],
+        collector_binary_path=expected_paths["collector_binary_path"],
     )
-    for key, managed_path in {
-        "collector_config_path": config.collector_config_path,
-        "authorization_header_path": config.authorization_header_path,
-        "queue_directory": config.queue_directory,
-        "collector_binary_path": config.collector_binary_path,
-    }.items():
-        try:
-            managed_path.relative_to(base_dir)
-        except ValueError as exc:
-            raise ConfigError(f"{key} must be inside {base_dir}") from exc
-    _validate_managed_path_relationships(config, state_directory=base_dir / "state")
     return config
-
-
-def _validate_managed_path_relationships(
-    config: AgentConfig, *, state_directory: Path
-) -> None:
-    file_targets = {
-        "collector_config_path": config.collector_config_path,
-        "authorization_header_path": config.authorization_header_path,
-        "collector_binary_path": config.collector_binary_path,
-    }
-    directory_targets = {
-        "queue_directory": config.queue_directory,
-        "state_directory": state_directory,
-    }
-
-    file_items = list(file_targets.items())
-    for index, (left_name, left_path) in enumerate(file_items):
-        for right_name, right_path in file_items[index + 1 :]:
-            if (
-                left_path == right_path
-                or left_path in right_path.parents
-                or right_path in left_path.parents
-            ):
-                raise ConfigError(f"{left_name} and {right_name} must not overlap")
-
-    if (
-        config.queue_directory == state_directory
-        or config.queue_directory in state_directory.parents
-        or state_directory in config.queue_directory.parents
-    ):
-        raise ConfigError("queue_directory and state_directory must not overlap")
-
-    for directory_name, directory_path in directory_targets.items():
-        for file_name, file_path in file_targets.items():
-            if (
-                directory_path == file_path
-                or directory_path in file_path.parents
-                or file_path in directory_path.parents
-            ):
-                raise ConfigError(f"{directory_name} and {file_name} must not overlap")
 
 
 def _resource_processor(source: str) -> dict[str, Any]:

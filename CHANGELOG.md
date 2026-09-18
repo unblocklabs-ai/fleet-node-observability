@@ -4,6 +4,16 @@
 
 - Nothing yet.
 
+## 0.3.3 - 2026-09-18
+
+- Restore usage collection on newer Codex CLIs with the supported never-approval
+  policy; report closed app-server output separately from actual timeouts.
+- Prefer the Codex-specific usage bucket and preserve optional window semantics.
+- Timestamp every completed gateway readiness probe so stale textfiles cannot
+  masquerade as healthy probes after being scraped again.
+- Retire the constant-zero usage snapshot age and unused Vector ready-heartbeat
+  mode; simplify fixed schema-3 layout validation while preserving input guards.
+
 ## 0.3.2 - 2026-09-18
 
 - Preserve existing backups and atomic temporary files when exclusive creation

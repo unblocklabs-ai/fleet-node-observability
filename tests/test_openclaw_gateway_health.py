@@ -7,6 +7,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,12 +80,6 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
         self.assertIn('"event_type":"gateway_unready"', result.stdout)
         self.assertIn('"gateway_ready":false', result.stdout)
 
-    def test_ready_heartbeat_suppresses_unready_noise(self) -> None:
-        result = self.run_script("ready-heartbeat", "http://127.0.0.1:9/readyz", "mini_03")
-
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
-
     def test_prometheus_mode_writes_zero_when_unready(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output = Path(temp_dir) / "gateway.prom"
@@ -100,6 +95,8 @@ class OpenClawGatewayHealthTests(unittest.TestCase):
             self.assertIn('openclaw_gateway_ready{node="mini_03",gateway_ready_url="http://127.0.0.1:9/readyz"} 0', content)
             self.assertNotIn("service=", content)
             self.assertNotIn("openclaw_gateway_last_ready_check_timestamp_seconds", content)
+            timestamp = next(line for line in content.splitlines() if line.startswith('openclaw_gateway_check_timestamp_seconds{'))
+            self.assertLess(abs(time.time() - float(timestamp.rsplit(' ', 1)[1])), 5)
 
     def test_status_mode_reports_ready_when_ready_endpoint_responds(self) -> None:
         port = free_port()

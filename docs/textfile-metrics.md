@@ -13,6 +13,9 @@ authenticated OTLP/HTTP connection.
   first observed non-empty without a subsequently observed valid zero.
 - `openclaw_gateway_ready{node,gateway_ready_url}` checks the loopback readiness endpoint every 60
   seconds.
+- `openclaw_gateway_check_timestamp_seconds{node}` records each completed probe, including failed
+  probes. Treat readiness as unknown when this timestamp is absent, older than 120 seconds, or
+  more than 30 seconds in the future; re-scraping a stale textfile does not renew readiness.
 - macOS thermal metrics report pressure availability, level, collection success, collection time,
   and a bounded error label every 60 seconds.
 - OpenClaw cron schedule collection runs locally every five minutes. It exports collector
@@ -27,6 +30,10 @@ When `codex_usage_enabled` is true, Codex usage collection runs every five minut
 installed `codex app-server` methods `account/read` and `account/rateLimits/read`. Codex owns login
 and token refresh. The collector does not read OAuth files, call private web endpoints, or infer usage
 from transcripts.
+Window durations are source-reported: primary can be weekly, and a missing secondary window is
+unavailable, not zero usage. Prefer the `codex` entry in `rateLimitsByLimitId`, falling back to the
+legacy `rateLimits` object. Use `time() - codex_usage_collected_at_seconds` for collection age;
+the former constant-zero snapshot-age metric has been retired.
 
 All node labels in textfiles are client claims. Charizard authentication remains authoritative.
 Keep labels bounded and coordinate metric or label changes with central dashboard and alert tests.
