@@ -153,6 +153,7 @@ def write_openclaw_config(
     if backup and expected.stat_values is not None:
         backup_path = path.with_name(
             f"{path.name}.bak-fleet-otel-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+            f"-{time.time_ns()}-{os.getpid()}"
         )
         try:
             write_new_private_file(backup_path, expected.content)
