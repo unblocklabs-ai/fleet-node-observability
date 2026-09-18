@@ -4,6 +4,13 @@
 
 - Nothing yet.
 
+## 0.3.2 - 2026-09-18
+
+- Preserve existing backups and atomic temporary files when exclusive creation
+  fails; cleanup only follows a successful creation by the current operation.
+- Give OpenClaw backup names nanosecond and process suffixes so ordinary
+  same-second configuration updates keep separate private recovery copies.
+
 ## 0.3.1 - 2026-09-18
 
 - Preserve the operator's explicit OpenClaw content-capture setting during

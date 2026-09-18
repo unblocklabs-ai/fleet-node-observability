@@ -5,6 +5,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fleet_node_observability.config import ConfigError
 from fleet_node_observability.openclaw import (
@@ -15,6 +16,41 @@ from fleet_node_observability.openclaw import (
 
 
 class OpenClawConfigTest(unittest.TestCase):
+    def test_backup_collision_preserves_backup_and_current_config(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("fleet_node_observability.openclaw.time.strftime", return_value="fixed"),
+            patch("fleet_node_observability.openclaw.time.time_ns", return_value=123),
+        ):
+            path = Path(tmpdir) / "openclaw.json"
+            original = '{"original":true}\n'
+            path.write_text(original)
+            backup = write_openclaw_config(
+                path, {"first": True}, expected=load_openclaw_config(path).revision, backup=True,
+            )
+            current = path.read_bytes()
+            with self.assertRaisesRegex(ConfigError, "unable to create backup"):
+                write_openclaw_config(
+                    path, {"second": True}, expected=load_openclaw_config(path).revision, backup=True,
+                )
+            self.assertEqual(path.read_bytes(), current)
+            self.assertEqual(backup.read_text(), original)
+
+    def test_two_updates_in_same_second_have_distinct_backups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, patch(
+            "fleet_node_observability.openclaw.time.strftime", return_value="same-second",
+        ):
+            path = Path(tmpdir) / "openclaw.json"
+            path.write_text('{"version":0}\n')
+            backups = []
+            for version in (1, 2):
+                backups.append(write_openclaw_config(
+                    path, {"version": version}, expected=load_openclaw_config(path).revision, backup=True,
+                ))
+            self.assertNotEqual(*backups)
+            self.assertEqual([json.loads(item.read_text()) for item in backups],
+                             [{"version": 0}, {"version": 1}])
+
     def test_loopback_settings_replace_headers_and_default_content_capture_off(self) -> None:
         payload = {
             "unrelated": True,

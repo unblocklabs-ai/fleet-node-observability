@@ -16,9 +16,9 @@ def fsync_directory(path: Path) -> None:
 
 
 def write_new_private_file(path: Path, content: str) -> None:
-    descriptor = -1
+    # A failed exclusive open does not make the existing file ours to remove.
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             descriptor = -1
             handle.write(content)
@@ -38,9 +38,8 @@ def write_new_private_file(path: Path, content: str) -> None:
 
 def write_private_atomic(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{time.time_ns()}")
-    descriptor = -1
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             descriptor = -1
             handle.write(content)
