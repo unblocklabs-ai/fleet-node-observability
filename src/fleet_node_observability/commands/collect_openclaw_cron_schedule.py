@@ -178,6 +178,10 @@ def render(node: str, jobs: list[dict[str, Any]], *, now: int | None = None) -> 
             "# TYPE openclaw_cron_job_info gauge",
             "# HELP openclaw_cron_job_next_run_timestamp_seconds Unix timestamp of the job's next scheduled run.",
             "# TYPE openclaw_cron_job_next_run_timestamp_seconds gauge",
+            "# HELP openclaw_cron_job_last_run_timestamp_seconds Unix timestamp of the latest attempted run; absent before the first run.",
+            "# TYPE openclaw_cron_job_last_run_timestamp_seconds gauge",
+            "# HELP openclaw_cron_job_running_since_timestamp_seconds Unix timestamp when the current run started; absent when not running.",
+            "# TYPE openclaw_cron_job_running_since_timestamp_seconds gauge",
             "# HELP openclaw_cron_job_last_duration_seconds Duration of the job's latest run.",
             "# TYPE openclaw_cron_job_last_duration_seconds gauge",
             "# HELP openclaw_cron_job_consecutive_errors Current consecutive execution error count.",
@@ -188,10 +192,17 @@ def render(node: str, jobs: list[dict[str, Any]], *, now: int | None = None) -> 
         state = job.get("state") if isinstance(job.get("state"), dict) else {}
         identity = job_labels(node, job)
         lines.append(f"openclaw_cron_job_info{labels(identity)} 1")
+        for key, metric in (
+            ("lastRunAtMs", "openclaw_cron_job_last_run_timestamp_seconds"),
+            ("runningAtMs", "openclaw_cron_job_running_since_timestamp_seconds"),
+        ):
+            value = state.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 < value < float("inf"):
+                lines.append(f"{metric}{labels(identity)} {value / 1000:.3f}")
         next_run_ms = state.get("nextRunAtMs")
         if isinstance(next_run_ms, (int, float)) and next_run_ms > 0:
             lines.append(
-                f"openclaw_cron_job_next_run_timestamp_seconds{labels(identity)} {next_run_ms / 1000:g}"
+                f"openclaw_cron_job_next_run_timestamp_seconds{labels(identity)} {next_run_ms / 1000:.3f}"
             )
         duration_ms = state.get("lastDurationMs")
         if isinstance(duration_ms, (int, float)) and duration_ms >= 0:

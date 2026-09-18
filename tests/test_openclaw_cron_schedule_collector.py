@@ -48,6 +48,7 @@ class OpenClawCronScheduleCollectorTests(unittest.TestCase):
                     "lastRunStatus": "error",
                     "lastDurationMs": 240_000,
                     "consecutiveErrors": 2,
+                    "lastRunAtMs": 1_799_998_123_456,
                     "runningAtMs": 1_799_999_000_000,
                 },
             },
@@ -74,6 +75,14 @@ class OpenClawCronScheduleCollectorTests(unittest.TestCase):
         self.assertIn("openclaw_cron_job_next_run_timestamp_seconds", text)
         self.assertIn("openclaw_cron_job_last_duration_seconds", text)
         self.assertIn("openclaw_cron_job_consecutive_errors", text)
+        self.assertRegex(text, r'openclaw_cron_job_last_run_timestamp_seconds\{[^\n]+\} 1799998123.456')
+        self.assertRegex(text, r'openclaw_cron_job_running_since_timestamp_seconds\{[^\n]+\} 1799999000.000')
+
+    def test_absent_or_invalid_run_times_are_not_reported_as_epoch(self) -> None:
+        for value in (None, 0, -1, True, "123", float("nan"), float("inf")):
+            text = collector.render("bill", [{"id": "a", "state": {"lastRunAtMs": value, "runningAtMs": value}}])
+            samples = [line for line in text.splitlines() if not line.startswith("#")]
+            self.assertFalse(any(line.startswith(("openclaw_cron_job_last_run_timestamp_seconds", "openclaw_cron_job_running_since_timestamp_seconds")) for line in samples))
 
     def test_trigger_commands_and_control_characters_never_become_labels(self) -> None:
         job = {

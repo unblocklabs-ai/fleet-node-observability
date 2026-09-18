@@ -23,6 +23,10 @@ authenticated OTLP/HTTP connection.
   identity, next-run, latest-duration, running, normalized status, and consecutive-error fields. It
   never exports job payloads, trigger commands, or error messages. This replaces the former
   cross-node `cron_pressure.prom` snapshot.
+- `openclaw_cron_job_last_run_timestamp_seconds` is the latest attempted run, not
+  the latest successful completion. `openclaw_cron_job_running_since_timestamp_seconds`
+  exists only while a run is recorded as active. Missing timestamps remain absent,
+  never epoch zero. Run timestamps retain millisecond precision.
 
 ## Capability-gated
 
