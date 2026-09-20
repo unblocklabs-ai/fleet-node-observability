@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +70,17 @@ class SessionCountsTest(unittest.TestCase):
         counts, _, _ = collect(self.root, self.state, self.now)
         self.assertEqual(counts["2026-03-09", "all"], 2)
         self.assertEqual(counts["2026-03-09", "cron"], 1)
+
+    def test_existing_schedule_collects_sessions_even_when_cron_rpc_fails(self):
+        from fleet_node_observability.commands import collect_openclaw_cron_schedule as cron
+        output=self.root/'metrics/openclaw_cron_schedule.prom'
+        with mock.patch('sys.argv',['collector','--node','test','--output',str(output)]), \
+             mock.patch.object(cron,'collect_jobs',side_effect=cron.CollectionError('timeout','timeout')), \
+             mock.patch('fleet_node_observability.commands.collect_openclaw_sessions.render',return_value=('sessions test\n',0)) as sessions:
+            self.assertEqual(cron.main(),1)
+        sessions.assert_called_once()
+        self.assertEqual(output.with_name('openclaw_sessions.prom').read_text(),'sessions test\n')
+        self.assertIn('collector_success{node="test",node_label="test"} 0',output.read_text())
 
 
 if __name__ == "__main__":
