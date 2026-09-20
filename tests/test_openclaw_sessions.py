@@ -4,10 +4,11 @@ import tempfile
 import unittest
 from contextlib import closing
 from unittest import mock
-from datetime import datetime
+from collections import Counter
+from datetime import date, datetime
 from pathlib import Path
 
-from fleet_node_observability.commands.collect_openclaw_sessions import collect, render, ZONE
+from fleet_node_observability.commands.collect_openclaw_sessions import calendar_counts, collect, render, retention_start, ZONE
 
 
 class SessionCountsTest(unittest.TestCase):
@@ -52,7 +53,7 @@ class SessionCountsTest(unittest.TestCase):
         self.assertEqual(counts['2026-03-09','all'],0)
         self.assertEqual(collect(self.root,self.state,self.now)[0],counts)
         # A corrected date older than the window must remove the mistaken recent count.
-        self.metadata('old','agent:main:slack:x',sessionStartedAt=original-40*86400000)
+        self.metadata('old','agent:main:slack:x',sessionStartedAt=original-500*86400000)
         self.assertEqual(sum(collect(self.root,self.state,self.now)[0].values()),0)
 
     def test_reset_metadata_cannot_redate_a_previous_window(self):
@@ -96,14 +97,54 @@ class SessionCountsTest(unittest.TestCase):
         self.assertNotIn(b"agent:main", self.state.read_bytes())
 
     def test_dst_offsets_and_bounded_series(self):
+        self.insert('before-dst','agent:main:slack:x',datetime(2026,3,8,0,1,tzinfo=ZONE).timestamp()*1000)
         text, status = render("test", self.root, self.state, self.now)
         self.assertEqual(status, 0)
         collected = next(line for line in text.splitlines() if line.startswith('openclaw_sessions_collected_at_seconds{'))
         self.assertEqual(float(collected.rsplit(' ', 1)[1]), self.now)
-        self.assertEqual(sum(line.startswith("openclaw_sessions_daily{") for line in text.splitlines()), 60)
+        rows=[line for line in text.splitlines() if line.startswith("openclaw_sessions_daily{")]
+        self.assertLessEqual(len(rows),397*3)
+        self.assertEqual(sum(not line.endswith(' NaN') for line in rows),6)
         self.assertIn('session_day="2026-03-08T00:00:00-05:00"', text)
         self.assertIn('session_day="2026-03-09T00:00:00-04:00"', text)
         self.assertEqual(self.state.stat().st_mode & 0o777, 0o600)
+
+    def test_calendar_totals_monday_weeks_and_actual_months(self):
+        counts=Counter({('2026-02-28','all'):2,('2026-02-28','cron'):1,
+                        ('2026-03-01','all'):3,('2026-03-01','cron'):1,
+                        ('2026-03-02','all'):4,('2026-03-02','cron'):0})
+        values=calendar_counts(counts,date(2026,3,9),self.now)
+        self.assertEqual(values['weekly']['2026-02-23','all'],5)
+        self.assertEqual(values['weekly']['2026-03-02','all'],4)
+        self.assertEqual(values['monthly']['2026-02-01','all'],2)
+        self.assertEqual(values['monthly']['2026-03-01','all'],7)
+        for grain in values.values():
+            for bucket,kind in grain:
+                self.assertEqual(grain[bucket,'all'],grain[bucket,'cron']+grain[bucket,'noncron'])
+        self.assertNotIn(('2026-01-01','all'),values['monthly'])
+        self.assertIn(('2026-03-09','all'),values['daily'])  # observed zero today
+
+    def test_thirteen_calendar_month_retention_and_leap_day(self):
+        self.assertEqual(retention_start(date(2025,2,28)),date(2024,2,1))
+        self.assertEqual(retention_start(date(2024,2,29)),date(2023,2,1))
+        self.insert('last-year','agent:main:slack:x',datetime(2025,3,1,tzinfo=ZONE).timestamp()*1000)
+        self.insert('too-old','agent:main:slack:y',datetime(2025,2,28,tzinfo=ZONE).timestamp()*1000)
+        counts,_,_=collect(self.root,self.state,self.now)
+        self.assertEqual(counts['2025-03-01','all'],1)
+        self.assertNotIn(('2025-02-28','all'),counts)
+        # Missing source rows remain preserved beyond the previous thirty-day limit.
+        with closing(sqlite3.connect(self.dbpath)) as db, db:
+            db.execute('DELETE FROM session_windows')
+        later=datetime(2026,3,31,tzinfo=ZONE).timestamp()
+        self.assertEqual(collect(self.root,self.state,later)[0]['2025-03-01','all'],1)
+        april=datetime(2026,4,1,tzinfo=ZONE).timestamp()
+        self.assertNotIn(('2025-03-01','all'),collect(self.root,self.state,april)[0])
+
+    def test_empty_backfill_is_not_a_year_of_fabricated_zeroes(self):
+        values=calendar_counts(Counter(),date(2026,3,9),self.now)
+        for grain in values.values():
+            self.assertEqual(len(grain),3)
+            self.assertEqual(set(grain.values()),{0})
 
     def test_missing_source_is_failure_not_zero(self):
         self.dbpath.unlink()

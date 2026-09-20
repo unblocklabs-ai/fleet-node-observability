@@ -4,6 +4,14 @@
 
 - Nothing yet.
 
+## 0.3.7 - 2026-09-20
+
+- Retain the current calendar month plus twelve prior months of private session
+  identities, backfilling only dated metadata still present on each node.
+- Publish daily, Monday-weekly, and calendar-monthly observed session totals,
+  with all / cron / noncron choices. Preserve unknown historical periods as NaN
+  gaps rather than inventing zeroes. No transcript collection or new services.
+
 ## 0.3.6 - 2026-09-20
 
 - Collect daily all-session and cron-only starts through the existing five-minute

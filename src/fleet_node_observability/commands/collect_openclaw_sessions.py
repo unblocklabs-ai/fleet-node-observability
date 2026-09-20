@@ -10,14 +10,13 @@ import sqlite3
 import time
 from collections import Counter
 from contextlib import closing
-from datetime import datetime, time as day_time, timedelta
+from datetime import date, datetime, time as day_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fleet_node_observability.textfile import escape_label_value, write_textfile_atomic
 
 ZONE = ZoneInfo("America/New_York")
-DAYS = 30
 MAX_AGENTS = 32
 MAX_ROWS = 200_000
 
@@ -26,10 +25,40 @@ class CollectionError(RuntimeError):
     pass
 
 
+def retention_start(today: date) -> date:
+    """Current calendar month and twelve previous months, including leap years."""
+    return date(today.year - 1, today.month, 1)
+
+
+def calendar_counts(counts: Counter, today: date, since: float) -> dict[str, Counter]:
+    """Sum unique daily observations, never repeated scrapes or rolling averages.
+
+    Do not invent historical zero buckets before preservation began. Older buckets
+    are present only when they contain at least one retained dated observation.
+    """
+    grouped = {grain: Counter() for grain in ("daily", "weekly", "monthly")}
+    observed_day = datetime.fromtimestamp(since, ZONE).date()
+    day = retention_start(today)
+    while day <= today:
+        starts = {"daily": day, "weekly": day - timedelta(days=day.weekday()),
+                  "monthly": day.replace(day=1)}
+        for grain, start in starts.items():
+            bucket = start.isoformat()
+            if day >= observed_day or counts[day.isoformat(), "all"] > 0:
+                for kind in ("all", "cron"):
+                    grouped[grain][bucket, kind] += counts[day.isoformat(), kind]
+        day += timedelta(days=1)
+    for values in grouped.values():
+        for bucket, kind in list(values):
+            if kind == "all":
+                values[bucket, "noncron"] = values[bucket, "all"] - values[bucket, "cron"]
+    return grouped
+
+
 def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
     """Fail the whole snapshot on source failure; never substitute missing agents with zero."""
     today = datetime.fromtimestamp(now, ZONE).date()
-    first = today - timedelta(days=DAYS - 1)
+    first = retention_start(today)
     paths = sorted((root / "agents").glob("*/agent/openclaw-agent.sqlite"))
     if not paths or len(paths) > MAX_AGENTS:
         raise CollectionError("source_missing_or_unbounded")
@@ -92,6 +121,8 @@ def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
                 "SET day=excluded.day, cron=excluded.cron", records
             )
             ledger.execute("DELETE FROM starts WHERE day < ?", (first.isoformat(),))
+            if ledger.execute("SELECT count(*) FROM starts").fetchone()[0] > MAX_ROWS:
+                raise CollectionError("ledger_unbounded")
         counts = Counter()
         for day, cron, count in ledger.execute("SELECT day, cron, count(*) FROM starts GROUP BY day, cron"):
             counts[day, "all"] += count
@@ -121,15 +152,25 @@ def render(node: str, root: Path, state: Path, now: float) -> tuple[str, int]:
     metric("openclaw_sessions_collector_success", "Whether all local session metadata sources were read successfully.", 1)
     metric("openclaw_sessions_undated", "Retained session windows excluded because they have no valid start timestamp.", undated)
     metric("openclaw_sessions_observed_since_seconds", "When the local collector first began preserving dated starts; older counts use retained metadata only.", since)
-    name = "openclaw_sessions_daily"
-    lines.extend([f"# HELP {name} Unique dated session windows retained or observed per New York calendar day; today is partial.", f"# TYPE {name} gauge"])
     today = datetime.fromtimestamp(now, ZONE).date()
-    for offset in reversed(range(DAYS)):
-        day = today - timedelta(days=offset)
-        # Explicit offset makes the bucket unambiguous across DST in Grafana.
-        bucket = datetime.combine(day, day_time(), ZONE).isoformat()
-        for kind in ("all", "cron"):
-            lines.append(f'{name}{labels(base | {"session_day": bucket, "session_kind": kind})} {counts[day.isoformat(), kind]}')
+    metric("openclaw_sessions_retained_from_seconds", "Start of the retained thirteen-calendar-month window; not proof of complete coverage.",
+           datetime.combine(retention_start(today), day_time(), ZONE).timestamp())
+    for grain, values in calendar_counts(counts, today, since).items():
+        name = "openclaw_sessions_" + grain
+        lines.extend([f"# HELP {name} Unique observed starts per New York calendar period; current and pre-preservation periods are partial.", f"# TYPE {name} gauge"])
+        day = retention_start(today)
+        periods = set()
+        while day <= today:
+            periods.add(day if grain == "daily" else day - timedelta(days=day.weekday())
+                        if grain == "weekly" else day.replace(day=1))
+            day += timedelta(days=1)
+        for day in sorted(periods):
+            # Existing session_day label denotes period START; weeks begin Monday.
+            bucket = datetime.combine(day, day_time(), ZONE).isoformat()
+            for kind in ("all", "cron", "noncron"):
+                # Explicit NaN prevents lines bridging unknown history; never fake zero.
+                count = values.get((day.isoformat(), kind), "NaN")
+                lines.append(f'{name}{labels(base | {"session_day": bucket, "session_kind": kind})} {count}')
     return "\n".join(lines) + "\n", 0
 
 
