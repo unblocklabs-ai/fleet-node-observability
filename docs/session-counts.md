@@ -20,21 +20,19 @@ occurrence age (ten minutes, maximum future skew 30 seconds), not just scrape fr
 
 ## Add to existing managed nodes
 
-Use GitHub-reviewed source transferred from the central checkout. Do not rerun the full
-node installer just to add this collector. As root, run:
+Use source fetched from GitHub. Do not rerun the full node installer just to add this
+collector. Resolve the runtime paths from the existing managed cron collector plist.
+Back up its `collect_openclaw_cron_schedule.py`, verify that its hash matches the reviewed
+pre-change module, then atomically install the new session module followed by the updated
+cron module. Both are owned by the existing managed account. The cron module invokes the
+session collector after publishing its own result, regardless of cron RPC success.
 
-```
-python3 /absolute/source/src/fleet_node_observability/commands/install_session_collector.py
-```
-
-This derives the account, Python, runtime and textfile paths from the existing managed cron
-collector plist. It adds one module and `com.unblocklabs.openclaw-sessions-textfile`, taking
-backups under `/var/tmp/fleet-sessions-before-*`. It does not upgrade the whole node package,
-change credentials, or restart OpenClaw, node_exporter or the OTLP Collector. Record the
-module SHA separately from the root package VERSION. A full installation includes this service.
+This reuses the existing five-minute service, without root access or a new LaunchDaemon.
+It does not upgrade the whole node package, change credentials, or restart OpenClaw,
+node_exporter or the OTLP Collector. Record module SHAs separately from root package VERSION.
 
 Verify both local `openclaw_sessions_collector_success == 1` and fresh central metrics,
 including the preserved `session_day` / `session_kind` labels. Check all 60 rows per node and
 that each cron count is <= the corresponding all count. Validate a subsequent scheduled run.
-Rollback: boot out only the new session service, restore any backed-up module/plist, and
-move its `.prom` file outside the textfile directory. Preserve the private ledger for recovery.
+Rollback: restore the backed-up cron module and move `openclaw_sessions.prom` outside the
+textfile directory. Preserve the session module and private ledger for recovery.

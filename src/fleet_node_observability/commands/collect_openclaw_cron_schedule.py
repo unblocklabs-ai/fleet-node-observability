@@ -248,6 +248,15 @@ def main() -> int:
         status = 1
     if args.output:
         write_textfile_atomic(args.output.expanduser(), content)
+        # Reuse this existing five-minute schedule, independent of cron RPC success.
+        from fleet_node_observability.commands.collect_openclaw_sessions import render as render_sessions
+
+        sessions, _ = render_sessions(
+            args.node, Path.home() / ".openclaw",
+            Path.home() / ".openclaw/fleet-node-observability/state/sessions/starts.sqlite",
+            time.time(),
+        )
+        write_textfile_atomic(args.output.expanduser().with_name("openclaw_sessions.prom"), sessions)
     else:
         print(content, end="")
     return status
