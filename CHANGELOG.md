@@ -4,6 +4,14 @@
 
 - Nothing yet.
 
+## 0.3.6 - 2026-09-20
+
+- Collect daily all-session and cron-only starts through the existing five-minute
+  schedule, with private deduplication and New York calendar-day buckets.
+- Resolve `sessionStartedAt` from identity-matched session metadata before
+  `started_at`; never substitute an import/update timestamp. Repair prior ledger
+  day assignments without double-counting or losing observations after cleanup.
+
 ## 0.3.5 - 2026-09-18
 
 - Publish latest cron attempt and active-run start timestamps; omit unavailable

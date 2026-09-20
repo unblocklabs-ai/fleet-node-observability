@@ -60,9 +60,12 @@ node monitoring port.
 Metric and label names consumed by central dashboards and alerts are a cross-repository API. Any
 change requires coordinated tests in both repositories.
 
-Session metrics use only `session_windows.started_at`, never import/update time or run counts.
+Session metrics prefer `session_nodes.entry_json.sessionStartedAt`, joined by session key and
+current session ID and checked against the JSON session ID, then `session_windows.started_at`.
+They never use unverified `created_at`/`updated_at` or run counts. The lifecycle timestamp has
+precedence, matching OpenClaw's session-creation resolver without its activity-time fallback.
 The collector reads each agent SQLite database in `mode=ro`. A private, 30-day hashed-ID ledger
-deduplicates starts and preserves observations through later session cleanup. Historical counts
+deduplicates starts, reconciles corrected dates, and preserves observations through later session cleanup. Historical counts
 are limited to retained dated metadata; missing start timestamps are excluded and reported as
 `openclaw_sessions_undated`. Collection every five minutes cannot guarantee capture of sessions
 created and deleted between collections. No transcripts, session IDs, or session keys leave the node.

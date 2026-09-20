@@ -1,4 +1,5 @@
 import sqlite3
+import json
 import tempfile
 import unittest
 from contextlib import closing
@@ -19,11 +20,63 @@ class SessionCountsTest(unittest.TestCase):
         self.dbpath.parent.mkdir(parents=True)
         with closing(sqlite3.connect(self.dbpath)) as db, db:
             db.execute("CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, session_key TEXT, started_at INTEGER)")
+            db.execute("CREATE TABLE session_nodes (session_key TEXT PRIMARY KEY, current_session_id TEXT, entry_json TEXT)")
         self.now = datetime(2026, 3, 9, 12, tzinfo=ZONE).timestamp()
 
     def insert(self, identity, key, timestamp):
         with closing(sqlite3.connect(self.dbpath)) as db, db:
             db.execute("INSERT INTO session_windows VALUES (?,?,?)", (identity, key, timestamp))
+
+    def metadata(self, identity, key, **fields):
+        with closing(sqlite3.connect(self.dbpath)) as db, db:
+            db.execute("INSERT OR REPLACE INTO session_nodes VALUES (?,?,?)",
+                       (key, identity, json.dumps({'sessionId':identity, **fields})))
+
+    def test_recovers_lifecycle_timestamp_without_projected_start(self):
+        self.insert('old', 'agent:main:cron:job', None)
+        self.metadata('old', 'agent:main:cron:job', sessionStartedAt=self.now*1000)
+        before=self.dbpath.read_bytes()
+        counts,undated,_=collect(self.root,self.state,self.now)
+        self.assertEqual(counts['2026-03-09','all'],1)
+        self.assertEqual(counts['2026-03-09','cron'],1)
+        self.assertEqual(undated,0)
+        self.assertEqual(self.dbpath.read_bytes(),before)
+
+    def test_lifecycle_priority_repairs_existing_ledger_without_double_count(self):
+        self.insert('old', 'agent:main:slack:x', self.now*1000)
+        collect(self.root,self.state,self.now)
+        original=datetime(2026,3,8,12,tzinfo=ZONE).timestamp()*1000
+        self.metadata('old','agent:main:slack:x',sessionStartedAt=original)
+        counts,_,_=collect(self.root,self.state,self.now)
+        self.assertEqual(counts['2026-03-08','all'],1)
+        self.assertEqual(counts['2026-03-09','all'],0)
+        self.assertEqual(collect(self.root,self.state,self.now)[0],counts)
+        # A corrected date older than the window must remove the mistaken recent count.
+        self.metadata('old','agent:main:slack:x',sessionStartedAt=original-40*86400000)
+        self.assertEqual(sum(collect(self.root,self.state,self.now)[0].values()),0)
+
+    def test_reset_metadata_cannot_redate_a_previous_window(self):
+        self.insert('previous','agent:main:slack:x',None)
+        self.metadata('replacement','agent:main:slack:x',sessionStartedAt=self.now*1000)
+        counts,undated,_=collect(self.root,self.state,self.now)
+        self.assertFalse(counts)
+        self.assertEqual(undated,1)
+
+    def test_update_time_and_invalid_lifecycle_values_are_not_start_dates(self):
+        for i,value in enumerate([None,0,-1,True,'1789870000000']):
+            identity=str(i); key='agent:main:slack:'+identity
+            self.insert(identity,key,None)
+            self.metadata(identity,key,sessionStartedAt=value,updatedAt=self.now*1000,createdAt=self.now*1000)
+        counts,undated,_=collect(self.root,self.state,self.now)
+        self.assertFalse(counts)
+        self.assertEqual(undated,5)
+
+    def test_metadata_identity_and_future_lifecycle_timestamp_are_checked(self):
+        self.insert('old','agent:main:slack:x',None)
+        self.metadata('old','agent:main:slack:x',sessionId='wrong',sessionStartedAt=self.now*1000)
+        self.assertEqual(collect(self.root,self.state,self.now)[1],1)
+        self.metadata('old','agent:main:slack:x',sessionStartedAt=(self.now+3600)*1000)
+        self.assertEqual(render('test',self.root,self.state,self.now)[1],1)
 
     def test_calendar_buckets_dedupe_and_cleanup_preservation(self):
         self.insert("one", "agent:main:cron:job", datetime(2026, 3, 8, 0, 1, tzinfo=ZONE).timestamp()*1000)

@@ -6,11 +6,19 @@ each named fleet node. Repeated turns within one session do not increase the cou
 the `agent:<agent>:cron:<job>` namespace (including isolated runs); children are not inferred
 to be cron. Buckets use America/New_York midnight, including DST offsets.
 
-The source is each agent's `session_windows` table, opened with SQLite `mode=ro`. No
+The sources are each agent's `session_windows` and `session_nodes` tables, opened with SQLite `mode=ro`. No
 transcript/body queries. A private, mode-0600 ledger stores only hashed identity, day and
 cron boolean, pruning after 30 days. It preserves observed starts after source cleanup.
-`started_at` is not replaced with `created_at`/`updated_at`: migration/import timestamps
-would put old sessions on false dates.
+Use the identity-matched `entry_json.sessionStartedAt` first, then `session_windows.started_at`.
+The metadata join must match both session key and current session ID; the JSON session ID
+must also match. This prevents reset/replacement metadata from dating an older window.
+Never blindly use `created_at`/`updated_at`: OpenClaw's creation resolver may fall back to
+activity time. Existing ledger rows are reconciled by identity, including corrections out
+of the thirty-day range; observations whose source disappeared are retained until expiry.
+
+The initial collector incorrectly called every missing `started_at` row undated. Version
+0.3.6 fixes that and the precedence of the two start representations. Do not use the initial
+rollout's excluded count as evidence that the source stores lack dates.
 
 Limits: backfill covers retained, dated metadata only. Undated windows are reported separately.
 Sessions removed before the first collection or created and deleted between five-minute

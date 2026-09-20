@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import re
 import sqlite3
 import time
@@ -29,7 +30,6 @@ def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
     """Fail the whole snapshot on source failure; never substitute missing agents with zero."""
     today = datetime.fromtimestamp(now, ZONE).date()
     first = today - timedelta(days=DAYS - 1)
-    cutoff_ms = int(datetime.combine(first, day_time(), ZONE).timestamp() * 1000)
     paths = sorted((root / "agents").glob("*/agent/openclaw-agent.sqlite"))
     if not paths or len(paths) > MAX_AGENTS:
         raise CollectionError("source_missing_or_unbounded")
@@ -43,15 +43,27 @@ def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as db:
             deadline = time.monotonic() + 10
             db.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
-            undated += db.execute("SELECT count(*) FROM session_windows WHERE started_at IS NULL OR started_at <= 0").fetchone()[0]
             rows = db.execute(
-                "SELECT session_id, session_key, started_at FROM session_windows "
-                "WHERE started_at >= ? LIMIT ?", (cutoff_ms, MAX_ROWS + 1)
+                """SELECT w.session_id, w.session_key, w.started_at,
+                       CASE WHEN json_extract(n.entry_json, '$.sessionId') = w.session_id
+                            AND json_type(n.entry_json, '$.sessionStartedAt') IN ('integer', 'real')
+                            THEN json_extract(n.entry_json, '$.sessionStartedAt') END
+                   FROM session_windows w LEFT JOIN session_nodes n
+                     ON n.session_key = w.session_key AND n.current_session_id = w.session_id
+                   LIMIT ?""", (MAX_ROWS + 1,)
             ).fetchall()
         if len(rows) > MAX_ROWS:
             raise CollectionError("source_unbounded")
-        for session_id, key, started in rows:
-            if not isinstance(started, (int, float)) or started > now * 1000 + 30_000:
+        for session_id, key, projected_start, session_start in rows:
+            # Match OpenClaw's lifecycle priority, but NEVER its updatedAt fallback.
+            # Join by window identity as well as key: a reset must not date an old window.
+            started = next((value for value in (session_start, projected_start)
+                            if isinstance(value, (int, float)) and not isinstance(value, bool)
+                            and math.isfinite(value) and value > 0), None)
+            if started is None:
+                undated += 1
+                continue
+            if started > now * 1000 + 30_000:
                 raise CollectionError("invalid_start_time")
             day = datetime.fromtimestamp(started / 1000, ZONE).date()
             if day > today:
@@ -60,6 +72,8 @@ def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
             cron = bool(re.match(r"^agent:[^:]+:cron:[^:]+(?:$|:)", key or ""))
             identity = hashlib.sha256((agent + "\0" + session_id).encode()).hexdigest()
             records.append((identity, day.isoformat(), int(cron)))
+            if len(records) > MAX_ROWS:
+                raise CollectionError("source_unbounded")
 
     state.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Only a private hashed-ID ledger is persisted; source DBs and bodies are never copied.
@@ -71,7 +85,12 @@ def collect(root: Path, state: Path, now: float) -> tuple[Counter, int, float]:
         )
         with ledger:
             ledger.execute("INSERT OR IGNORE INTO metadata VALUES ('observed_since', ?)", (now,))
-            ledger.executemany("INSERT OR IGNORE INTO starts VALUES (?, ?, ?)", records)
+            # Reconcile previously misdated observations; retain vanished source rows.
+            # Include old dates before pruning so corrections can move a row OUT of range.
+            ledger.executemany(
+                "INSERT INTO starts VALUES (?, ?, ?) ON CONFLICT(identity) DO UPDATE "
+                "SET day=excluded.day, cron=excluded.cron", records
+            )
             ledger.execute("DELETE FROM starts WHERE day < ?", (first.isoformat(),))
         counts = Counter()
         for day, cron, count in ledger.execute("SELECT day, cron, count(*) FROM starts GROUP BY day, cron"):
