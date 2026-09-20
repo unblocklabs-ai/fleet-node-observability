@@ -380,6 +380,8 @@ for runtime_command in \
   collect_codex_usage.py \
   collect_macos_thermal.py \
   collect_openclaw_cron_schedule.py \
+  collect_openclaw_sessions.py \
+  install_session_collector.py \
   configure_openclaw_local_otel.py; do
   run_as_node install -m 0644 \
     "$REPO_DIR/src/fleet_node_observability/commands/$runtime_command" \
@@ -649,6 +651,7 @@ restart_launchdaemon "$HEARTBEAT_LABEL" "$HEARTBEAT_PLIST"
 restart_launchdaemon "$GATEWAY_LABEL" "$GATEWAY_PLIST"
 restart_launchdaemon "$THERMAL_LABEL" "$THERMAL_PLIST"
 restart_launchdaemon "$CRON_SCHEDULE_LABEL" "$CRON_SCHEDULE_PLIST"
+"$PYTHON_BIN" "$RUNTIME_PYTHON/fleet_node_observability/commands/install_session_collector.py"
 if [[ "$CODEX_USAGE_ENABLED" == "True" ]]; then
   restart_launchdaemon "$CODEX_LABEL" "$CODEX_PLIST"
 fi

@@ -17,6 +17,7 @@ inventory, credentials, and deployment orchestration live in the separate
   - OpenClaw readiness
   - macOS thermal state
   - OpenClaw cron schedules
+  - daily dated session starts (all and cron-only, New York calendar days)
   - Codex usage, when enabled
 
 Only the Collector communicates with the central telemetry endpoint.

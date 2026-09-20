@@ -44,6 +44,7 @@ The node always exports:
 - host and textfile metrics scraped from loopback node_exporter;
 - Collector self-metrics;
 - a bounded local OpenClaw cron schedule snapshot; and
+- a 30-day daily session-start snapshot (all / cron, America/New_York); and
 - an occurrence-timestamp heartbeat with queue health.
 
 Raw logs received from OpenClaw are subject only to two low-severity structured routine-success
@@ -58,3 +59,15 @@ node monitoring port.
 
 Metric and label names consumed by central dashboards and alerts are a cross-repository API. Any
 change requires coordinated tests in both repositories.
+
+Session metrics use only `session_windows.started_at`, never import/update time or run counts.
+The collector reads each agent SQLite database in `mode=ro`. A private, 30-day hashed-ID ledger
+deduplicates starts and preserves observations through later session cleanup. Historical counts
+are limited to retained dated metadata; missing start timestamps are excluded and reported as
+`openclaw_sessions_undated`. Collection every five minutes cannot guarantee capture of sessions
+created and deleted between collections. No transcripts, session IDs, or session keys leave the node.
+`openclaw_sessions_daily` has bounded `session_day` (ISO midnight with New York UTC offset) and
+`session_kind` (`all` / `cron`) labels. At most 60 count series per node; cron is a subset of all.
+Cron means a session key in the `agent:<agent>:cron:<job>` namespace, not every scheduled run or
+subagent spawned by a cron session. Today is partial. Successful scans emit observed zero;
+failed scans omit counts, and dashboards suppress snapshots older than ten minutes.

@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export PYTHONPATH="$SCRIPT_DIR/../src${PYTHONPATH:+:$PYTHONPATH}"
+exec "${FLEET_NODE_PYTHON:-python3}" -m fleet_node_observability.commands.collect_openclaw_sessions "$@"

@@ -1,0 +1,75 @@
+import sqlite3
+import tempfile
+import unittest
+from contextlib import closing
+from datetime import datetime
+from pathlib import Path
+
+from fleet_node_observability.commands.collect_openclaw_sessions import collect, render, ZONE
+
+
+class SessionCountsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.state = self.root / "private" / "starts.sqlite"
+        self.dbpath = self.root / "agents/main/agent/openclaw-agent.sqlite"
+        self.dbpath.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(self.dbpath)) as db, db:
+            db.execute("CREATE TABLE session_windows (session_id TEXT PRIMARY KEY, session_key TEXT, started_at INTEGER)")
+        self.now = datetime(2026, 3, 9, 12, tzinfo=ZONE).timestamp()
+
+    def insert(self, identity, key, timestamp):
+        with closing(sqlite3.connect(self.dbpath)) as db, db:
+            db.execute("INSERT INTO session_windows VALUES (?,?,?)", (identity, key, timestamp))
+
+    def test_calendar_buckets_dedupe_and_cleanup_preservation(self):
+        self.insert("one", "agent:main:cron:job", datetime(2026, 3, 8, 0, 1, tzinfo=ZONE).timestamp()*1000)
+        self.insert("two", "agent:main:slack:x", datetime(2026, 3, 7, 23, 59, tzinfo=ZONE).timestamp()*1000)
+        self.insert("unknown", "agent:main:slack:y", None)
+        before = self.dbpath.read_bytes()
+        counts, undated, since = collect(self.root, self.state, self.now)
+        self.assertEqual(counts["2026-03-08", "cron"], 1)
+        self.assertEqual(counts["2026-03-07", "all"], 1)
+        self.assertEqual(undated, 1)
+        self.assertEqual(self.dbpath.read_bytes(), before)
+        self.assertEqual(collect(self.root, self.state, self.now)[0], counts)
+        with closing(sqlite3.connect(self.dbpath)) as db, db:
+            db.execute("DELETE FROM session_windows")
+        self.assertEqual(collect(self.root, self.state, self.now + 10)[0], counts)
+        self.assertEqual(collect(self.root, self.state, self.now + 10)[2], since)
+        self.assertNotIn(b"agent:main", self.state.read_bytes())
+
+    def test_dst_offsets_and_bounded_series(self):
+        text, status = render("test", self.root, self.state, self.now)
+        self.assertEqual(status, 0)
+        collected = next(line for line in text.splitlines() if line.startswith('openclaw_sessions_collected_at_seconds{'))
+        self.assertEqual(float(collected.rsplit(' ', 1)[1]), self.now)
+        self.assertEqual(sum(line.startswith("openclaw_sessions_daily{") for line in text.splitlines()), 60)
+        self.assertIn('session_day="2026-03-08T00:00:00-05:00"', text)
+        self.assertIn('session_day="2026-03-09T00:00:00-04:00"', text)
+        self.assertEqual(self.state.stat().st_mode & 0o777, 0o600)
+
+    def test_missing_source_is_failure_not_zero(self):
+        self.dbpath.unlink()
+        text, status = render("test", self.root, self.state, self.now)
+        self.assertEqual(status, 1)
+        self.assertNotIn("openclaw_sessions_daily", text)
+        self.assertIn('openclaw_sessions_collector_success{node="test",node_label="test"} 0', text)
+        self.assertFalse(self.dbpath.exists())
+
+    def test_future_timestamp_fails_closed(self):
+        self.insert("future", "agent:main:cron:job", (self.now+3600)*1000)
+        self.assertEqual(render("test", self.root, self.state, self.now)[1], 1)
+
+    def test_cron_does_not_match_slack_text_or_double_count_runs(self):
+        for identity, key in [("cron", "agent:main:cron:job:run:id"), ("user", "agent:main:slack:cron:job")]:
+            self.insert(identity, key, self.now*1000)
+        counts, _, _ = collect(self.root, self.state, self.now)
+        self.assertEqual(counts["2026-03-09", "all"], 2)
+        self.assertEqual(counts["2026-03-09", "cron"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
