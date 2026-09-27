@@ -58,6 +58,9 @@ workflow.
 
 Install a checksummed release:
 
+Remote release URLs must use HTTPS, including redirects. Without `--sha256`,
+remote installs require a matching HTTPS `.sha256` sidecar.
+
 ```bash
 release_version="$(cat VERSION)"
 sudo ./packaging/install-from-release.sh \

@@ -4,6 +4,14 @@
 
 - Nothing yet.
 
+## 0.3.8 - 2026-09-27
+
+- Require HTTPS for remote release downloads and redirects, including checksum
+  sidecars; retain explicit checksum verification for pinned installations.
+- Keep the embedded package version consistent when building with `--version`.
+- Document repository boundaries and validation; exclude local browser/build
+  artifacts. Node collection/runtime behavior is unchanged from v0.3.7.
+
 ## 0.3.7 - 2026-09-20
 
 - Retain the current calendar month plus twelve prior months of private session

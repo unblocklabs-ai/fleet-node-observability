@@ -9,7 +9,7 @@ Install a release tarball locally. Defaults are local-first and avoid central
 network lookups when possible.
 
 Options:
-  --tarball <path|url>           Release file path or URL
+  --tarball <path|url>           Release file path or HTTPS URL
   --sha256 <hex|path>             Expected tarball SHA256 or checksum file path
   --install-dir <dir>             Destination root (default: /usr/local/fleet-node-observability)
   --overwrite                     Replace existing install directory
@@ -266,13 +266,17 @@ download_if_url() {
   local source="$1"
   local dest="$2"
 
-  if [[ "${source}" == http://* || "${source}" == https://* ]]; then
+  if [[ "${source}" == http://* ]]; then
+    echo "Remote release downloads require HTTPS." >&2
+    return 1
+  fi
+  if [[ "${source}" == https://* ]]; then
     if ! command -v curl >/dev/null 2>&1; then
       echo "curl is required to fetch remote tarballs." >&2
       exit 1
     fi
-    curl -fsSL "${source}" -o "${dest}"
-    return
+    curl --proto '=https' --proto-redir '=https' -fsSL "${source}" -o "${dest}"
+    return $?
   fi
 
   if [[ -f "${source}" ]]; then
@@ -294,9 +298,9 @@ else
 fi
 
 if [[ -z "${SHA256_SOURCE}" ]]; then
-  if [[ "${TARBALL}" == http://* || "${TARBALL}" == https://* ]]; then
+  if [[ "${TARBALL}" == https://* ]]; then
     SHA256_SOURCE="${tmpdir}/release.sha256"
-    if ! curl -fsSL "$(remote_sha256_url "${TARBALL}")" -o "${SHA256_SOURCE}"; then
+    if ! download_if_url "$(remote_sha256_url "${TARBALL}")" "${SHA256_SOURCE}"; then
       echo "Remote tarball installs require SHA256 verification. Pass --sha256 or publish a matching .sha256 sidecar." >&2
       exit 1
     fi

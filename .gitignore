@@ -9,6 +9,9 @@ htmlcov/
 
 # Local runtime and generated artifacts
 .runtime/
+.playwright-cli/
+.playwright-mcp/
+dist/
 output/
 tmp/
 *.log

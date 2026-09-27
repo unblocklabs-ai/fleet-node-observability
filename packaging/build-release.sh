@@ -94,6 +94,8 @@ for path in "${include_paths[@]}"; do
   fi
 done
 
+printf '%s\n' "${VERSION}" > "${STAGING}/VERSION"
+
 if [[ -d "${ROOT_DIR}/src" ]]; then
   cp -R "${ROOT_DIR}/src" "${STAGING}/"
 fi
