@@ -1,0 +1,29 @@
+{
+  "userDirectories": [
+    "/Users/billjohansson/.openclaw/fleet-node-observability",
+    "/Users/billjohansson/fleet-node-ts-canary-20260927",
+    "/Users/billjohansson/fleet-agent-health-canary.ATAF9s",
+    "/Users/billjohansson/fleet-next-0.3.3",
+    "/Users/billjohansson/fleet-node-rollout-v0.3.0-25d1ada",
+    "/Users/billjohansson/.openclaw/fleet-cron-0.3.5-backup-1789763906910096000",
+    "/Users/billjohansson/.openclaw/fleet-runtime-hotfix-0.3.3-1789747325927755000",
+    "/Users/billjohansson/.openclaw/fleet-log-recovery-20260918",
+    "/Users/billjohansson/.openclaw/fleet-legacy-quarantine-20260918",
+    "/Users/billjohansson/Library/Caches/com.apple.python/Users/billjohansson/.openclaw/fleet-log-recovery-20260918/fleet-node-observability-0.3.1"
+  ],
+  "userFiles": [
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/codex_usage.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/fleet_node_agent_heartbeat.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/fleet_node_exporter_install.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/macos_thermal.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/openclaw_cron_schedule.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/openclaw_gateway_ready.prom",
+    "/opt/homebrew/var/lib/node_exporter/textfile_collector/openclaw_sessions.prom"
+  ],
+  "privilegedDirectories": [
+    "/usr/local/fleet-node-observability"
+  ],
+  "backupOnly": [
+    "/Users/billjohansson/Library/LaunchAgents/com.billjohansson.openclaw-codex-otel-capture.plist"
+  ]
+}

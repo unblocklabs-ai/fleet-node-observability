@@ -1,0 +1,22 @@
+{
+  "name": "@unblocklabs/fleet-node",
+  "version": "0.1.2",
+  "description": "Standalone macOS fleet node telemetry agent",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unblocklabs-ai/fleet-node-observability.git"
+  },
+  "license": "MIT",
+  "type": "module",
+  "os": ["darwin"],
+  "cpu": ["arm64", "x64"],
+  "bin": { "fleet-node": "dist/cli.js" },
+  "files": ["dist/*.js", "README.md", "LICENSE", "docs/migration.md", "docs/sessions-contract.md"],
+  "engines": { "node": ">=24.18.0 <25" },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.0" }
+}

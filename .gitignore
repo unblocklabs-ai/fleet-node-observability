@@ -1,19 +1,20 @@
+node_modules/
+dist/
+*.tgz
 .DS_Store
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
+artifacts/fleet-staging-20260928/
+ops/__pycache__/
 
-# Local runtime and generated artifacts
+# Local runtime, rollout evidence and generated artifacts
 .runtime/
 output/
+outputs/
 tmp/
 *.log
+__pycache__/
+*.py[cod]
 
-# Secrets and host-local config
+# Secrets and host-local configuration
 .env
 .env.*
 !.env.example
@@ -21,7 +22,7 @@ secrets/
 *.secret
 *.token
 
-# macOS/editor noise
+# Editor files
 *.swp
 *.swo
 .idea/
