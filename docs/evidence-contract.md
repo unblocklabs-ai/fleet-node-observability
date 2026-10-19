@@ -39,12 +39,17 @@ Partial records of any size wait at their starting offset. JSONL is framed only
 by LF bytes, not Unicode separators inside JSON strings. Coverage reports scan
 freshness, incomplete work, parsing/unsupported records and rewrites. No readable
 source is failure, not a healthy idle observation.
-Local schema-1/2/3 checkpoint databases migrate to schema 4 without deleting queued
+Local schema-1/2/3/4 checkpoint databases migrate to version 5 without deleting queued
 evidence/history; offsets replay to recover formerly skipped records and complete
 diagnostics. The central worker accepts all four evidence schemas, preferring the
 new normalization for the same source observation. This evidence version is distinct
 from the unchanged four-field node configuration schema. Other harnesses and compressed archives remain unsupported,
 not silently treated as covered.
+
+The log body contains a content-free fact hash so Loki cannot collapse distinct
+metadata records sharing a batch timestamp. Checkpoint version 5 preserves old
+accepted hashes, but marks pre-fix acceptance for source replay through the new
+transport envelope. Evidence packet schema remains 4.
 
 OTLP partial rejection keeps the whole batch for retry. Loopback acceptance is
 not a central receipt: existing Collector queues have finite retry/size limits.

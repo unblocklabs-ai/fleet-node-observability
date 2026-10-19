@@ -53,6 +53,8 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
     assert.equal(req.url, '/v1/logs'); let body = ''; for await (const chunk of req) body += chunk;
     assert.ok(!body.includes('PRIVATE')); assert.ok(!body.includes('same-thread'));
     const logs = JSON.parse(body).resourceLogs[0].scopeLogs[0].logRecords;
+    // Loki's deduplication contract ignores structured metadata.
+    assert.equal(new Set(logs.map(log => `${log.timeUnixNano}:${log.body.stringValue}`)).size, logs.length);
     packets.push(...logs.map(log => JSON.parse(log.attributes[0].value.stringValue)));
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(rejectBatch ? { partialSuccess: { rejectedLogRecords: '1' } } : {}));
   });
@@ -135,7 +137,7 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.equal(inspected.find(p=>p.outcome === 'success').diagnostics.inspection, 'not_inspected');
   assert.ok(inspected.some(p=>p.diagnostics.inspection === 'empty'));
   db = inspect();
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='unsupported'").get()?.value ?? 0, 0);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='parse_errors'").get()?.value ?? 0, 0);
   assert.ok(db.prepare('SELECT 1 FROM sent WHERE key=?').get('retained-history'));

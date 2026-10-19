@@ -242,7 +242,7 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
               if (Number(packet.occurred_ms) >= now - 90 * 86400_000) {
                 const { observed_ms: _observed, ...facts } = packet;
                 const key = hash(facts);
-                if (!db.prepare('SELECT 1 FROM sent WHERE key=?').get(key)) db.prepare('INSERT OR IGNORE INTO outbox VALUES (?,?,?)').run(key, JSON.stringify(packet), now);
+                if (!db.prepare('SELECT 1 FROM sent WHERE key=? AND transport_version=2').get(key)) db.prepare('INSERT OR IGNORE INTO outbox VALUES (?,?,?)').run(key, JSON.stringify(packet), now);
               }
           }
           fragments = []; fragmentBytes = 0;
@@ -283,7 +283,9 @@ async function deliver(db: DatabaseSync): Promise<void> {
     const observed = String(BigInt(Date.now()) * 1_000_000n);
     const response = await fetch('http://127.0.0.1:4318/v1/logs', { method: 'POST', signal: AbortSignal.timeout(4000), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resourceLogs: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'fleet-node-evidence' } }] }, scopeLogs: [{ scope: { name: 'fleet.evidence', version: '1' }, logRecords: rows.map(row => ({
-        timeUnixNano: observed, observedTimeUnixNano: observed, severityNumber: 9, body: { stringValue: 'fleet tool evidence v1' },
+        // Loki deduplicates timestamp + body, not structured metadata. The
+        // content-free fact key distinguishes records sharing a batch time.
+        timeUnixNano: observed, observedTimeUnixNano: observed, severityNumber: 9, body: { stringValue: `fleet tool evidence v1 ${String(row.key)}` },
         attributes: [{ key: 'fleet.evidence', value: { stringValue: String(row.packet) } }],
       })) }] }] }) });
     if (!response.ok) throw new Error('evidence_export_rejected');
@@ -297,7 +299,7 @@ async function deliver(db: DatabaseSync): Promise<void> {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const row of rows) {
-        if (row.key !== 'coverage') db.prepare('INSERT OR REPLACE INTO sent VALUES (?,?)').run(String(row.key), Date.now());
+        if (row.key !== 'coverage') db.prepare('INSERT INTO sent(key,accepted_ms,transport_version) VALUES (?,?,2) ON CONFLICT(key) DO UPDATE SET accepted_ms=excluded.accepted_ms,transport_version=2').run(String(row.key), Date.now());
         db.prepare('DELETE FROM outbox WHERE key=?').run(String(row.key));
       }
       db.exec('COMMIT');
@@ -323,7 +325,7 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
     // A SQLite writer lock releases automatically on crash/kill. No stale PID lock.
     lock.exec('BEGIN EXCLUSIVE');
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    if (![0, 1, 2, 3, 4].includes(schema)) throw new Error('unsupported_evidence_database');
+    if (![0, 1, 2, 3, 4, 5].includes(schema)) throw new Error('unsupported_evidence_database');
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,agent TEXT,offset INTEGER DEFAULT 0,inode TEXT DEFAULT '',anchor TEXT DEFAULT '',dropping INTEGER DEFAULT 0,checked INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS directories(path TEXT PRIMARY KEY,root TEXT,agent TEXT);
@@ -340,6 +342,10 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
     if (schema < 4) db.exec(`BEGIN IMMEDIATE;
       UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
       PRAGMA user_version=4; COMMIT;`);
+    if (schema < 5) db.exec(`BEGIN IMMEDIATE;
+      ALTER TABLE sent ADD COLUMN transport_version INTEGER NOT NULL DEFAULT 1;
+      UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
+      PRAGMA user_version=5; COMMIT;`);
     const version = await packageVersion();
     db.exec('BEGIN IMMEDIATE');
     try { await scan(context, db, Date.now(), version); db.exec('COMMIT'); }
