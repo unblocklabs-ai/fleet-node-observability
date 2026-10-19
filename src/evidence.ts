@@ -1,4 +1,4 @@
-/** Content-free native evidence. Runs only in the separately killable cron child. */
+/** Native evidence and complete redacted diagnostics, isolated in the cron child. */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { object, type RuntimeContext } from './config.js';
 import { ensurePrivateDir, isErrno, metric, readRegular, writeAtomic } from './io.js';
 import { packageVersion } from './provision.js';
+import { redactEvidence } from './evidence-redaction.js';
 
 const CHUNK = 512 * 1024;
 const MAX_OUTBOX = 10_000;
@@ -99,11 +100,19 @@ function packetFromLine(line: string, agent: string, version: string, now: numbe
   else if (item.status === 'denied' || item.status === 'declined') outcome = 'denied';
   else if (item.success === false || item.status === 'failed' || (exit !== null && exit !== 0)) outcome = 'failure';
   else if (item.success === true || (item.type === 'CommandExecution' && exit === 0)) outcome = 'success';
-  // Inspect complete output text in memory, and only for terminal failures.
-  // Parameters, command text, prompts, and arbitrary excerpts never leave the host.
+  // Keep every original output/error field, including novel prose and successful
+  // wrappers containing an underlying error. Do not export conversation prompts
+  // or unrelated tool arguments. Credential redaction is not an excerpt policy.
   const texts: string[] = [];
-  if (outcome === 'failure' || outcome === 'unknown') {
-    for (const key of ['stderr', 'aggregated_output']) if (typeof item[key] === 'string') texts.push(item[key]);
+  const output: Record<string, unknown> = {};
+  if (phase === 'completed') {
+    for (const key of ['stdout', 'stderr', 'aggregated_output', 'output', 'error', 'result', 'content_items']) {
+      if (item[key] !== undefined) output[key] = item[key];
+    }
+    for (const key of ['stdout', 'stderr', 'aggregated_output', 'output', 'error', 'result']) {
+      if (typeof item[key] === 'string') texts.push(item[key]);
+      else if (item[key] !== undefined) texts.push(JSON.stringify(item[key]));
+    }
     if (Array.isArray(item.content_items)) for (const entry of item.content_items) {
       if (entry && typeof entry === 'object' && 'text' in entry && typeof entry.text === 'string') texts.push(entry.text);
     }
@@ -134,13 +143,14 @@ function packetFromLine(line: string, agent: string, version: string, now: numbe
     // Shell composition makes an exit code ambiguous; do not call it "no match".
     executable = match?.[1] && !/[|;&\n`$<>]/.test(command) ? match[1].replace('python3', 'python') : 'other';
   }
-  const duration = phase === 'completed' && started && completed && completed >= started && completed - started <= 90 * 86400_000 ? completed - started : null;
-  return { schema: 4, kind: 'observation', id, source: 'codex_native', occurred_ms: occurred, observed_ms: now,
+  const duration = phase === 'completed' && started && completed && completed >= started ? completed - started : null;
+  return { schema: 5, kind: 'observation', id, source: 'codex_native', occurred_ms: occurred, observed_ms: now,
     attempt_id: attempt, population: item.type === 'DynamicToolCall' ? 'dynamic_tool' : 'command_execution', phase,
     tool: item.type === 'CommandExecution' ? 'command' : token(item.tool), namespace: token(item.namespace), outcome,
     duration_ms: duration, timing_basis: duration === null ? 'unavailable' : 'native_item_interval', signals,
     exit_code: exit, http_status: http, executable, agent: hash(agent), node_agent_version: version,
-    diagnostics: diagnostics(texts, outcome === 'failure' || outcome === 'unknown'), harness: 'codex', ...context };
+    diagnostics: diagnostics(texts, phase === 'completed'), harness: 'codex', ...context,
+    context: phase === 'completed' ? { format: 'native_tool_output', redaction: 'credentials-v1', text: JSON.stringify(redactEvidence(output)) } : null };
 }
 
 async function scan(context: RuntimeContext, db: DatabaseSync, now: number, version: string): Promise<void> {
@@ -151,7 +161,6 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
   const newSweep = !count('SELECT count(*) n FROM directories') && !count('SELECT count(*) n FROM files WHERE checked < (SELECT value FROM counters WHERE key=\'scan_started_ms\')');
   {
     const agents = await readdir(join(context.settings.openclawRoot, 'agents'), { withFileTypes: true });
-    if (agents.length > 32) throw new Error('evidence_agent_limit');
     for (const entry of agents) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const source = join(context.settings.openclawRoot, 'agents', entry.name, 'agent/codex-home/sessions');
@@ -177,10 +186,9 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
     const path = String(row.path), root = String(row.root), agent = String(row.agent);
     try {
       const entries = await readdir(path, { withFileTypes: true });
-      if (entries.length > 20_000) throw new Error('evidence_directory_limit');
       for (const entry of entries) {
         const child = join(path, entry.name);
-        if (entry.isDirectory() && relative(root, child).split('/').length <= 8) db.prepare('INSERT OR IGNORE INTO directories VALUES (?,?,?)').run(child, root, agent);
+        if (entry.isDirectory()) db.prepare('INSERT OR IGNORE INTO directories VALUES (?,?,?)').run(child, root, agent);
         else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
           const day = relative(root, child).slice(0, 10);
           db.prepare('INSERT INTO files(path,agent,day) VALUES (?,?,?) ON CONFLICT(path) DO UPDATE SET day=excluded.day')
@@ -189,7 +197,6 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
       }
     } catch (error) { if (!isErrno(error, 'ENOENT')) throw error; increment('rewrites'); }
     db.prepare('DELETE FROM directories WHERE path=?').run(path);
-    if (count('SELECT count(*) n FROM files') > 50_000 || count('SELECT count(*) n FROM directories') > 10_000) throw new Error('evidence_inventory_limit');
   }
   const started = get('scan_started_ms');
   const recent = new Date(now - 2 * 86400_000).toISOString().slice(0, 10).replaceAll('-', '/');
@@ -268,7 +275,7 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
   }
   const pending = count(`SELECT count(*) n FROM files WHERE checked < ${started}`) + count('SELECT count(*) n FROM directories');
   if (!pending) set('last_full_scan_ms', now);
-  const coverage = { schema: 4, kind: 'coverage', id: hash(['coverage', now]), source: 'codex_native', occurred_ms: now, observed_ms: now,
+  const coverage = { schema: 5, kind: 'coverage', id: hash(['coverage', now]), source: 'codex_native', occurred_ms: now, observed_ms: now,
     last_full_scan_ms: get('last_full_scan_ms'), scan_started_ms: started, source_latest_ms: get('source_latest_ms'),
     parse_errors: get('parse_errors'), unsupported: get('unsupported'), rewrites: get('rewrites'), pending_files: pending,
     outbox_records: count('SELECT count(*) n FROM outbox'), scan_complete: pending === 0, transport: await transportHealth() };
@@ -283,10 +290,10 @@ async function deliver(db: DatabaseSync): Promise<void> {
     const observed = String(BigInt(Date.now()) * 1_000_000n);
     const response = await fetch('http://127.0.0.1:4318/v1/logs', { method: 'POST', signal: AbortSignal.timeout(4000), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resourceLogs: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'fleet-node-evidence' } }] }, scopeLogs: [{ scope: { name: 'fleet.evidence', version: '1' }, logRecords: rows.map(row => ({
-        // Loki deduplicates timestamp + body, not structured metadata. The
-        // content-free fact key distinguishes records sharing a batch time.
-        timeUnixNano: observed, observedTimeUnixNano: observed, severityNumber: 9, body: { stringValue: `fleet tool evidence v1 ${String(row.key)}` },
-        attributes: [{ key: 'fleet.evidence', value: { stringValue: String(row.packet) } }],
+        // Full redacted packets belong in the body, not Loki's 64-KiB metadata
+        // field. Distinct source identities also prevent timestamp/body dedup.
+        timeUnixNano: observed, observedTimeUnixNano: observed, severityNumber: 9, body: { stringValue: String(row.packet) },
+        attributes: [{ key: 'fleet.evidence', value: { stringValue: 'body-v2' } }],
       })) }] }] }) });
     if (!response.ok) throw new Error('evidence_export_rejected');
     const body = await response.text();
@@ -325,7 +332,7 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
     // A SQLite writer lock releases automatically on crash/kill. No stale PID lock.
     lock.exec('BEGIN EXCLUSIVE');
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    if (![0, 1, 2, 3, 4, 5].includes(schema)) throw new Error('unsupported_evidence_database');
+    if (![0, 1, 2, 3, 4, 5, 6].includes(schema)) throw new Error('unsupported_evidence_database');
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,agent TEXT,offset INTEGER DEFAULT 0,inode TEXT DEFAULT '',anchor TEXT DEFAULT '',dropping INTEGER DEFAULT 0,checked INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS directories(path TEXT PRIMARY KEY,root TEXT,agent TEXT);
@@ -346,6 +353,9 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
       ALTER TABLE sent ADD COLUMN transport_version INTEGER NOT NULL DEFAULT 1;
       UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
       PRAGMA user_version=5; COMMIT;`);
+    if (schema < 6) db.exec(`BEGIN IMMEDIATE;
+      UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
+      PRAGMA user_version=6; COMMIT;`);
     const version = await packageVersion();
     db.exec('BEGIN IMMEDIATE');
     try { await scan(context, db, Date.now(), version); db.exec('COMMIT'); }

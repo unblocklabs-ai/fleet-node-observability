@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 // Owns the native-file -> packaged CLI -> durable outbox -> OTLP boundary.
-// Synthetic private strings must never cross it; no real transcript fixtures.
+// Complete synthetic diagnostics cross it, credentials/prompts do not.
 test('evidence subprocess is opt-in, private, replayable, and resumes partial records and rejected exports', async t => {
   const root = await mkdtemp(join(tmpdir(), 'fleet-evidence-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -50,12 +50,14 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   await new Promise((resolve,reject)=>{metrics.once('error',reject);metrics.listen(8888,'127.0.0.1',resolve)});
   t.after(()=>new Promise(resolve=>metrics.close(resolve)));
   const server = createServer(async (req, res) => {
-    assert.equal(req.url, '/v1/logs'); let body = ''; for await (const chunk of req) body += chunk;
-    assert.ok(!body.includes('PRIVATE')); assert.ok(!body.includes('same-thread'));
+    assert.equal(req.url, '/v1/logs'); const chunks = []; for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks).toString('utf8');
+    assert.ok(!body.includes('PRIVATE ARGUMENT')); assert.ok(!body.includes('PRIVATE INSTRUCTIONS'));
+    assert.ok(!body.includes('SECRET_CREDENTIAL')); assert.ok(!body.includes('same-thread'));
     const logs = JSON.parse(body).resourceLogs[0].scopeLogs[0].logRecords;
     // Loki's deduplication contract ignores structured metadata.
     assert.equal(new Set(logs.map(log => `${log.timeUnixNano}:${log.body.stringValue}`)).size, logs.length);
-    packets.push(...logs.map(log => JSON.parse(log.attributes[0].value.stringValue)));
+    packets.push(...logs.map(log => JSON.parse(log.attributes[0].value.stringValue === 'body-v2' ? log.body.stringValue : log.attributes[0].value.stringValue)));
     res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify(rejectBatch ? { partialSuccess: { rejectedLogRecords: '1' } } : {}));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(4318, '127.0.0.1', resolve); });
@@ -89,13 +91,13 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.equal(newObservations[0].executable, 'rg');
   assert.equal(newObservations[0].diagnostics.output_present, false);
   db = inspect(); assert.equal(db.prepare('SELECT count(*) n FROM outbox').get().n, 0); db.close();
-  assert.ok(!(await readFile(join(root, 'state/evidence/evidence.sqlite'))).includes(Buffer.from('PRIVATE')));
+  assert.ok(!(await readFile(join(root, 'state/evidence/evidence.sqlite'))).includes(Buffer.from('PRIVATE INSTRUCTIONS')));
   // A large older inventory must not hide new live receipts until backfill ends.
   const old = join(sessions, '2020/01/01');
   await mkdir(old, { recursive: true });
   const ignored = JSON.stringify({ payload: { type: 'user_message', text: 'PRIVATE '.repeat(9000) } }) + '\n';
   for (let i = 0; i < 70; i++) await writeFile(join(old, `${i}.jsonl`), ignored.repeat(8));
-  await appendFile(path, line('novel', 'completed', { content_items: [{ text: 'TypeError: PRIVATE bearer sk-PRIVATE\nECONNRESET PRIVATE\ninvalid arguments: PRIVATE' }] }) + '\n');
+  await appendFile(path, line('novel', 'completed', { content_items: [{ text: 'TypeError: PRIVATE bearer sk-SECRET_CREDENTIAL\nECONNRESET PRIVATE\ninvalid arguments: PRIVATE\nThe purple gasket rejected the seventh widget.\npassword="SECRET_CREDENTIAL with spaces"' }], error: {message:'Nested original error', access_token:'SECRET_CREDENTIAL'} }) + '\n');
   await appendFile(path, line('http429', 'completed', { content_items: [{ text: 'Traceback (most recent call last):\nPRIVATE request(timeout=30)\nrequests.exceptions.HTTPError: 429 Client Error: PRIVATE' }] }) + '\n');
   await appendFile(path, line('composed-search', 'completed', { type: 'CommandExecution', command: ['/bin/zsh', '-lc', 'rg PRIVATE; python PRIVATE'], exit_code: 1, aggregated_output: '', content_items: [] }) + '\n');
   const beforeBackfill = packets.length;
@@ -104,6 +106,9 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.deepEqual(fresh.diagnostics.error_types, ['TypeError']);
   assert.deepEqual(fresh.diagnostics.codes, ['ECONNRESET']);
   assert.deepEqual(fresh.diagnostics.markers, ['invalid_arguments']);
+  assert.ok(fresh.context?.text.includes('The purple gasket rejected the seventh widget.'), 'full original diagnostic prose must survive, not only recognized regex tags');
+  assert.ok(fresh.context.text.includes('Nested original error'));
+  assert.ok(!fresh.context.text.includes('SECRET_CREDENTIAL'));
   assert.equal(fresh.harness_version, '1.2.3'); // context survives offset resumption
   const http = packets.slice(beforeBackfill).find(p => p.http_status === 429);
   assert.deepEqual(http.diagnostics.error_types, ['HTTPError']);
@@ -115,17 +120,21 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   const large = line('large-tail', 'completed', { aggregated_output: 'PRIVATE🙂\u2028\u2029\n'.repeat(70000) + 'FileNotFoundError: PRIVATE\n',
     content_items: [...Array.from({ length: 8 }, () => ({ text: 'PRIVATE' })), { text: 'invalid arguments: PRIVATE' }] });
   const beforeLarge = packets.length;
-  await appendFile(path, large.slice(0, 600000));
+  const largeBytes = Buffer.from(large);
+  await appendFile(path, largeBytes.subarray(0, 600000));
   assert.equal(await run(), 0);
   assert.equal(packets.slice(beforeLarge).filter(p => p.kind === 'observation').length, 0);
-  await appendFile(path, large.slice(600000) + '\n');
+  await appendFile(path, Buffer.concat([largeBytes.subarray(600000), Buffer.from('\n')]));
   assert.equal(await run(), 0);
   const recovered = packets.slice(beforeLarge).filter(p => p.kind === 'observation');
   assert.equal(recovered.length, 1);
   assert.deepEqual(recovered[0].diagnostics.error_types, ['FileNotFoundError']);
   assert.deepEqual(recovered[0].diagnostics.markers, ['invalid_arguments']);
   assert.equal(recovered[0].diagnostics.truncated, false);
-  assert.equal(recovered[0].schema, 4);
+  assert.equal(recovered[0].schema, 5);
+  const fullOutput = JSON.parse(recovered[0].context.text);
+  assert.equal(fullOutput.aggregated_output, 'PRIVATE🙂\u2028\u2029\n'.repeat(70000) + 'FileNotFoundError: PRIVATE\n');
+  assert.equal(fullOutput.content_items.length, 9);
   assert.equal(recovered[0].diagnostics.inspection, 'inspected');
   const diagnosticStart = packets.length;
   await appendFile(path, line('shell-error', 'completed', { aggregated_output: 'zsh:1: command not found: PRIVATE\nInvalid Context 0: PRIVATE\nerror: unrecognized arguments: PRIVATE', content_items: [] }) + '\n'
@@ -134,10 +143,11 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.equal(await run(), 0);
   const inspected = packets.slice(diagnosticStart).filter(p => p.kind === 'observation');
   assert.deepEqual(inspected.find(p=>p.diagnostics.markers.length).diagnostics.markers, ['command_not_found','cli_usage_error','patch_context_mismatch']);
-  assert.equal(inspected.find(p=>p.outcome === 'success').diagnostics.inspection, 'not_inspected');
+  assert.equal(inspected.find(p=>p.outcome === 'success').diagnostics.inspection, 'inspected');
+  assert.ok(inspected.find(p=>p.outcome === 'success').context.text.includes('PRIVATE'));
   assert.ok(inspected.some(p=>p.diagnostics.inspection === 'empty'));
   db = inspect();
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='unsupported'").get()?.value ?? 0, 0);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='parse_errors'").get()?.value ?? 0, 0);
   assert.ok(db.prepare('SELECT 1 FROM sent WHERE key=?').get('retained-history'));

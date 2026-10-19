@@ -51,7 +51,8 @@ export function renderCollectorConfig(ctx: RuntimeContext) {
       health_check: { endpoint: '127.0.0.1:13133' },
     },
     receivers: {
-      'otlp/openclaw': { protocols: { http: { endpoint: '127.0.0.1:4318' } } },
+      // Jev accepts 32 MiB JSON; the OTLP string envelope can double escaping.
+      'otlp/openclaw': { protocols: { http: { endpoint: '127.0.0.1:4318', max_request_body_size: 64 * 1024 * 1024 } } },
       'prometheus/agent': scrape('fleet_node_agent', '127.0.0.1:8888'),
       'prometheus/node_exporter': scrape('node_exporter_fleet', '127.0.0.1:9100'),
     },
@@ -72,7 +73,16 @@ export function renderCollectorConfig(ctx: RuntimeContext) {
       'batch/heartbeat': { timeout: '1s', send_batch_size: 10, send_batch_max_size: 20 },
     },
     exporters: {
-      'otlp_http/logs': exporter(ctx, 96, 1024, '24h'),
+      'otlp_http/logs': {
+        ...exporter(ctx, 96, 1024, '0s'),
+        sending_queue: {
+          ...exporter(ctx, 96, 1024, '0s').sending_queue,
+          // The byte splitter permanently drops an indivisible log above max_size.
+          // Send whole log records; one record per request also avoids aggregation
+          // pushing a provider-sized packet over the HTTP transport envelope.
+          batch: { flush_timeout: '1s', min_size: 1, max_size: 1, sizer: 'items' },
+        },
+      },
       'otlp_http/traces': exporter(ctx, 48, 1024, '12h'),
       'otlp_http/app_metrics': exporter(ctx, 32, 512, '6h'),
       'otlp_http/agent': exporter(ctx, 16, 256, '30m'),

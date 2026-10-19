@@ -1,20 +1,23 @@
 # Native tool evidence (opt-in)
 
 `fleet-node collect evidence --root /absolute/runtime` reads managed native Codex
-tool lifecycle events and exports content-free schema-4 evidence facts through the existing
+tool lifecycle events and exports schema-5 facts and complete redacted output through the existing
 loopback Collector. It does nothing unless private `config/evidence.enabled`
 contains `v1`. The normal cron collector runs it as an independent 45-second child.
 No new launchd service or schema-3 field is introduced.
 
 Only native DynamicToolCall and CommandExecution start/completion observations
-are supported. Messages, prompts, arguments and output are never exported or
-persisted in derived state. Complete output is inspected in memory for fixed
-anchored diagnostics, including the exact OpenClaw missing-handler receipt.
+are supported. Messages, prompts and tool arguments are not collected. Completed
+items retain all present `stdout`, `stderr`, `aggregated_output`, `output`, `error`,
+`result` and `content_items` fields in `context.text`, without excerpts or truncation.
+Credential-valued keys and recognizable secret strings are redacted before export.
+Redaction is best effort, not proof that arbitrary output contains no sensitive data.
+Complete output is also inspected for fixed anchored diagnostic hints.
 Diagnostics use a closed vocabulary of OS codes, exception types and markers,
 plus output-present/truncation flags and `inspection=inspected|empty|not_inspected`;
-successful output is deliberately not inspected. No arbitrary excerpt is redacted and sent.
+successful output is inspected too: successful wrappers can contain actual errors.
 Reviewed shell-command, CLI usage, patch-context, Git-revision and missing-tool-connection
-markers extend the vocabulary without copying private arguments or error prose.
+markers are hints, not limits on what Jev can understand from the original prose.
 Native shell argv (`/bin/zsh -lc`, bash/sh equivalents) is unwrapped only for the
 exact three-element shape; composed commands remain ambiguous. Empty output is
 reported as absent. These boundaries were checked against the Bill/Fred Farrynheight/
@@ -30,8 +33,9 @@ The central ledger owns attempt deduplication and late completion. Rotation and
 checkpoint-boundary rewrites trigger replay. Arbitrary historical in-place edits
 before the byte anchor are outside the append-only source contract.
 
-Collection is scheduled (32 agents, 50,000 files, 50 discovery directories and 64
-file visits per run, 10,000 outbox facts). I/O uses 512-KiB chunks but completes
+There are no agent/file/directory inventory or nesting-depth cutoffs. Collection
+is scheduled (50 discovery directories and 64 file visits per run, with backpressure
+at 10,000 outbox facts). These defer work without discarding it. I/O uses 512-KiB chunks but completes
 spanning records without truncating or dropping them. Up to 32 slots prioritize recent days;
 remaining slots rotate historical files by last visit. Today/yesterday discovery
 continues during catch-up, preventing old inventories from hiding new files.
@@ -39,20 +43,24 @@ Partial records of any size wait at their starting offset. JSONL is framed only
 by LF bytes, not Unicode separators inside JSON strings. Coverage reports scan
 freshness, incomplete work, parsing/unsupported records and rewrites. No readable
 source is failure, not a healthy idle observation.
-Local schema-1/2/3/4 checkpoint databases migrate to version 5 without deleting queued
+Local schema-1/2/3/4/5 checkpoint databases migrate to version 6 without deleting queued
 evidence/history; offsets replay to recover formerly skipped records and complete
-diagnostics. The central worker accepts all four evidence schemas, preferring the
+diagnostics and original output. The central worker accepts all five evidence schemas, preferring the
 new normalization for the same source observation. This evidence version is distinct
 from the unchanged four-field node configuration schema. Other harnesses and compressed archives remain unsupported,
 not silently treated as covered.
 
-The log body contains a content-free fact hash so Loki cannot collapse distinct
-metadata records sharing a batch timestamp. Checkpoint version 5 preserves old
-accepted hashes, but marks pre-fix acceptance for source replay through the new
-transport envelope. Evidence packet schema remains 4.
+The log body contains the full packet, with `fleet.evidence=body-v2` as a small
+metadata marker. This avoids Loki's structured-metadata limit and preserves distinct
+bodies at equal timestamps. Old envelopes remain readable. The node redacts before
+JSON serialization; central unstructured regexes must not rewrite escaped JSON.
 
 OTLP partial rejection keeps the whole batch for retry. Loopback acceptance is
-not a central receipt: existing Collector queues have finite retry/size limits.
+not a central receipt: Collector queues have finite memory/disk capacity. Log export
+now sends whole individual records (not byte-split batches that drop large items),
+and transient delivery retries no longer expire after 24 hours. HTTP transport
+accepts 64 MiB (Jev's 32-MiB body plus JSON-envelope escaping); larger rejected
+exports stay in the source/outbox, never truncated.
 Check central coverage and Collector drops. Evidence collection success and
 attempt timestamp gauges use the existing textfile path. The evidence marker can
 be removed to disable future runs without deleting checkpoints/history.
