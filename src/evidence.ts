@@ -285,16 +285,24 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
 
 async function deliver(db: DatabaseSync): Promise<void> {
   for (let batch = 0; batch < 8; batch++) {
-    const rows = db.prepare('SELECT * FROM outbox ORDER BY created,key LIMIT 128').all();
+    let rows = db.prepare('SELECT * FROM outbox ORDER BY created,key LIMIT 128').all();
     if (!rows.length) return;
     const observed = String(BigInt(Date.now()) * 1_000_000n);
-    const response = await fetch('http://127.0.0.1:4318/v1/logs', { method: 'POST', signal: AbortSignal.timeout(4000), headers: { 'Content-Type': 'application/json' },
+    let response: Response;
+    for (;;) {
+      response = await fetch('http://127.0.0.1:4318/v1/logs', { method: 'POST', signal: AbortSignal.timeout(4000), headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resourceLogs: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'fleet-node-evidence' } }] }, scopeLogs: [{ scope: { name: 'fleet.evidence', version: '1' }, logRecords: rows.map(row => ({
         // Full redacted packets belong in the body, not Loki's 64-KiB metadata
         // field. Distinct source identities also prevent timestamp/body dedup.
         timeUnixNano: observed, observedTimeUnixNano: observed, severityNumber: 9, body: { stringValue: String(row.packet) },
         attributes: [{ key: 'fleet.evidence', value: { stringValue: 'body-v2' } }],
       })) }] }] }) });
+      if (response.status !== 413 || rows.length === 1) break;
+      await response.body?.cancel();
+      // An aggregate can exceed the real receiver limit even when each complete
+      // record fits. Split only the envelope; never shorten an evidence record.
+      rows = rows.slice(0, Math.ceil(rows.length / 2));
+    }
     if (!response.ok) throw new Error('evidence_export_rejected');
     const body = await response.text();
     const acknowledgement = body ? object(JSON.parse(body) as unknown) : {};

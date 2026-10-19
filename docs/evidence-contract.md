@@ -61,6 +61,8 @@ now sends whole individual records (not byte-split batches that drop large items
 and transient delivery retries no longer expire after 24 hours. HTTP transport
 accepts 64 MiB (Jev's 32-MiB body plus JSON-envelope escaping); larger rejected
 exports stay in the source/outbox, never truncated.
+If a multi-record envelope receives HTTP 413, delivery retries smaller groups of
+whole records. A receiver-sized record must not get stuck behind an oversized batch.
 There is no asynchronous log batch processor before the persistent queue: a full
 queue must reject the caller before acknowledgement. Version 7 replays earlier
 acknowledgements once (transport version 3) to recover possible pre-queue loss.

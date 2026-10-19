@@ -45,7 +45,7 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   legacy.prepare('INSERT INTO sent VALUES (?,?)').run('retained-history', Date.now());
   legacy.close();
   await chmod(join(root, 'state/evidence/evidence.sqlite'), 0o600);
-  const packets = []; let rejectBatch = true;
+  const packets = []; let rejectBatch = true, rejectLargeBatch = false, oversizedRequests = 0;
   const metrics = createServer((req,res) => res.end('otelcol_exporter_queue_size{data_type="logs",exporter="otlp_http/logs"} 0\notelcol_exporter_send_failed_log_records{exporter="otlp_http/logs"} 2\notelcol_receiver_refused_log_records{receiver="otlp/openclaw",transport="http"} 0\n'));
   await new Promise((resolve,reject)=>{metrics.once('error',reject);metrics.listen(8888,'127.0.0.1',resolve)});
   t.after(()=>new Promise(resolve=>metrics.close(resolve)));
@@ -55,6 +55,10 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
     assert.ok(!body.includes('PRIVATE ARGUMENT')); assert.ok(!body.includes('PRIVATE INSTRUCTIONS'));
     assert.ok(!body.includes('SECRET_CREDENTIAL')); assert.ok(!body.includes('same-thread'));
     const logs = JSON.parse(body).resourceLogs[0].scopeLogs[0].logRecords;
+    if (rejectLargeBatch && logs.length > 1) {
+      oversizedRequests++;
+      res.writeHead(413); res.end(); return;
+    }
     // Loki's deduplication contract ignores structured metadata.
     assert.equal(new Set(logs.map(log => `${log.timeUnixNano}:${log.body.stringValue}`)).size, logs.length);
     packets.push(...logs.map(log => JSON.parse(log.attributes[0].value.stringValue === 'body-v2' ? log.body.stringValue : log.attributes[0].value.stringValue)));
@@ -125,7 +129,10 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.equal(await run(), 0);
   assert.equal(packets.slice(beforeLarge).filter(p => p.kind === 'observation').length, 0);
   await appendFile(path, Buffer.concat([largeBytes.subarray(600000), Buffer.from('\n')]));
+  rejectLargeBatch = true;
   assert.equal(await run(), 0);
+  assert.ok(oversizedRequests > 0);
+  rejectLargeBatch = false;
   const recovered = packets.slice(beforeLarge).filter(p => p.kind === 'observation');
   assert.equal(recovered.length, 1);
   assert.deepEqual(recovered[0].diagnostics.error_types, ['FileNotFoundError']);
