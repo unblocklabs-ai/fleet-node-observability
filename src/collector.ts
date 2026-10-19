@@ -65,7 +65,6 @@ export function renderCollectorConfig(ctx: RuntimeContext) {
       'filter/routine_openclaw_logs': { error_mode: 'ignore', logs: { log_record: routineLogDrops } },
       'filter/host_metrics': { error_mode: 'ignore', metrics: { metric: [`name == "${HEARTBEAT_METRIC}"`] } },
       'filter/heartbeat': { error_mode: 'ignore', metrics: { metric: [`name != "${HEARTBEAT_METRIC}"`] } },
-      'batch/logs': { timeout: '1s', send_batch_size: 512, send_batch_max_size: 1024 },
       'batch/traces': { timeout: '1s', send_batch_size: 512, send_batch_max_size: 1024 },
       'batch/app_metrics': { timeout: '2s', send_batch_size: 1000, send_batch_max_size: 2000 },
       'batch/agent': { timeout: '5s', send_batch_size: 500, send_batch_max_size: 1000 },
@@ -93,7 +92,9 @@ export function renderCollectorConfig(ctx: RuntimeContext) {
       extensions: ['file_storage/fleet', 'health_check'],
       telemetry: { metrics: { level: 'normal', readers: [{ pull: { exporter: { prometheus: { host: '127.0.0.1', port: 8888 } } } }] } },
       pipelines: {
-        'logs/openclaw': { receivers: ['otlp/openclaw'], processors: ['memory_limiter', 'resource/openclaw', 'filter/routine_openclaw_logs', 'batch/logs'], exporters: ['otlp_http/logs'] },
+        // Acknowledgement must follow durable enqueue. An asynchronous batch
+        // processor acknowledges first, then loses logs when the queue is full.
+        'logs/openclaw': { receivers: ['otlp/openclaw'], processors: ['memory_limiter', 'resource/openclaw', 'filter/routine_openclaw_logs'], exporters: ['otlp_http/logs'] },
         'traces/openclaw': { receivers: ['otlp/openclaw'], processors: ['memory_limiter', 'resource/openclaw', 'batch/traces'], exporters: ['otlp_http/traces'] },
         'metrics/openclaw': { receivers: ['otlp/openclaw'], processors: ['memory_limiter', 'resource/openclaw', 'batch/app_metrics'], exporters: ['otlp_http/app_metrics'] },
         'metrics/agent': { receivers: ['prometheus/agent'], processors: ['memory_limiter', 'resource/agent', 'batch/agent'], exporters: ['otlp_http/agent'] },

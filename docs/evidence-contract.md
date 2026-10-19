@@ -43,7 +43,7 @@ Partial records of any size wait at their starting offset. JSONL is framed only
 by LF bytes, not Unicode separators inside JSON strings. Coverage reports scan
 freshness, incomplete work, parsing/unsupported records and rewrites. No readable
 source is failure, not a healthy idle observation.
-Local schema-1/2/3/4/5 checkpoint databases migrate to version 6 without deleting queued
+Local schema-1/2/3/4/5/6 checkpoint databases migrate to version 7 without deleting queued
 evidence/history; offsets replay to recover formerly skipped records and complete
 diagnostics and original output. The central worker accepts all five evidence schemas, preferring the
 new normalization for the same source observation. This evidence version is distinct
@@ -61,6 +61,9 @@ now sends whole individual records (not byte-split batches that drop large items
 and transient delivery retries no longer expire after 24 hours. HTTP transport
 accepts 64 MiB (Jev's 32-MiB body plus JSON-envelope escaping); larger rejected
 exports stay in the source/outbox, never truncated.
+There is no asynchronous log batch processor before the persistent queue: a full
+queue must reject the caller before acknowledgement. Version 7 replays earlier
+acknowledgements once (transport version 3) to recover possible pre-queue loss.
 Check central coverage and Collector drops. Evidence collection success and
 attempt timestamp gauges use the existing textfile path. The evidence marker can
 be removed to disable future runs without deleting checkpoints/history.

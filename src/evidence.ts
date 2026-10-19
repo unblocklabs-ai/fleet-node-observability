@@ -249,7 +249,7 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
               if (Number(packet.occurred_ms) >= now - 90 * 86400_000) {
                 const { observed_ms: _observed, ...facts } = packet;
                 const key = hash(facts);
-                if (!db.prepare('SELECT 1 FROM sent WHERE key=? AND transport_version=2').get(key)) db.prepare('INSERT OR IGNORE INTO outbox VALUES (?,?,?)').run(key, JSON.stringify(packet), now);
+                if (!db.prepare('SELECT 1 FROM sent WHERE key=? AND transport_version=3').get(key)) db.prepare('INSERT OR IGNORE INTO outbox VALUES (?,?,?)').run(key, JSON.stringify(packet), now);
               }
           }
           fragments = []; fragmentBytes = 0;
@@ -306,7 +306,7 @@ async function deliver(db: DatabaseSync): Promise<void> {
     db.exec('BEGIN IMMEDIATE');
     try {
       for (const row of rows) {
-        if (row.key !== 'coverage') db.prepare('INSERT INTO sent(key,accepted_ms,transport_version) VALUES (?,?,2) ON CONFLICT(key) DO UPDATE SET accepted_ms=excluded.accepted_ms,transport_version=2').run(String(row.key), Date.now());
+        if (row.key !== 'coverage') db.prepare('INSERT INTO sent(key,accepted_ms,transport_version) VALUES (?,?,3) ON CONFLICT(key) DO UPDATE SET accepted_ms=excluded.accepted_ms,transport_version=3').run(String(row.key), Date.now());
         db.prepare('DELETE FROM outbox WHERE key=?').run(String(row.key));
       }
       db.exec('COMMIT');
@@ -332,7 +332,7 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
     // A SQLite writer lock releases automatically on crash/kill. No stale PID lock.
     lock.exec('BEGIN EXCLUSIVE');
     const schema = Number(db.prepare('PRAGMA user_version').get()?.user_version);
-    if (![0, 1, 2, 3, 4, 5, 6].includes(schema)) throw new Error('unsupported_evidence_database');
+    if (![0, 1, 2, 3, 4, 5, 6, 7].includes(schema)) throw new Error('unsupported_evidence_database');
     db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,agent TEXT,offset INTEGER DEFAULT 0,inode TEXT DEFAULT '',anchor TEXT DEFAULT '',dropping INTEGER DEFAULT 0,checked INTEGER DEFAULT 0);
       CREATE TABLE IF NOT EXISTS directories(path TEXT PRIMARY KEY,root TEXT,agent TEXT);
@@ -356,6 +356,9 @@ export async function collectEvidence(context: RuntimeContext): Promise<number> 
     if (schema < 6) db.exec(`BEGIN IMMEDIATE;
       UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
       PRAGMA user_version=6; COMMIT;`);
+    if (schema < 7) db.exec(`BEGIN IMMEDIATE;
+      UPDATE files SET offset=0,inode='',anchor='',dropping=0,checked=0,harness_version='unknown',instruction_hash=NULL;
+      PRAGMA user_version=7; COMMIT;`);
     const version = await packageVersion();
     db.exec('BEGIN IMMEDIATE');
     try { await scan(context, db, Date.now(), version); db.exec('COMMIT'); }

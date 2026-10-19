@@ -112,3 +112,38 @@ test('pinned real Collector routes heartbeats separately and filters only struct
   assert.equal(metrics(await documents(join(root, 'heartbeat.json'))).includes(HEARTBEAT_METRIC), true);
   assert.equal(metrics(await documents(join(root, 'heartbeat.json'))).includes('node_load1'), false);
 });
+
+test('pinned Collector rejects an unqueueable log before acknowledging the caller', { skip: !process.env.FLEET_COLLECTOR_BINARY }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'fleet-log-backpressure-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [otlp, health, internal] = await Promise.all([port(), port(), port()]);
+  const downstream = createServer((_req,res) => {res.writeHead(503);res.end();});
+  downstream.listen(0,'127.0.0.1'); await once(downstream,'listening');
+  t.after(() => new Promise(resolve => downstream.close(resolve)));
+  const config = renderCollectorConfig(context(root));
+  config.receivers['otlp/openclaw'].protocols.http.endpoint = `127.0.0.1:${otlp}`;
+  config.extensions.health_check.endpoint = `127.0.0.1:${health}`;
+  config.service.telemetry.metrics.readers[0].pull.exporter.prometheus.port = internal;
+  config.service.pipelines = { 'logs/openclaw':config.service.pipelines['logs/openclaw'] };
+  const exporter = config.exporters['otlp_http/logs'];
+  config.exporters = { 'otlp_http/logs':exporter };
+  exporter.endpoint = `http://127.0.0.1:${downstream.address().port}`;
+  exporter.headers = {};
+  exporter.sending_queue.queue_size = 65536; // deliberately small physical queue
+  await writeFile(join(root,'collector.json'), JSON.stringify(config));
+  const child = spawn(process.env.FLEET_COLLECTOR_BINARY,['--config=file:'+join(root,'collector.json')],{stdio:['ignore','ignore','pipe']});
+  let errors=''; child.stderr.on('data',b=>errors+=b);
+  const exited=once(child,'exit');
+  t.after(async()=>{if(child.exitCode===null)child.kill('SIGTERM');await exited;});
+  let ready=false;
+  for(let i=0;i<100;i++) {
+    try {ready=(await fetch(`http://127.0.0.1:${health}`,{signal:AbortSignal.timeout(500)})).ok;} catch {}
+    if(ready)break;
+    if(child.exitCode!==null)assert.fail(errors);
+    await delay(50);
+  }
+  assert.equal(ready,true,errors);
+  const body=JSON.stringify({resourceLogs:[{scopeLogs:[{logRecords:[{body:{stringValue:'synthetic diagnostic '.repeat(10000)}}]}]}]});
+  const response=await fetch(`http://127.0.0.1:${otlp}/v1/logs`,{method:'POST',headers:{'Content-Type':'application/json'},body});
+  assert.equal(response.ok,false,'a record not durably queued must not be acknowledged');
+});

@@ -147,7 +147,7 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.ok(inspected.find(p=>p.outcome === 'success').context.text.includes('PRIVATE'));
   assert.ok(inspected.some(p=>p.diagnostics.inspection === 'empty'));
   db = inspect();
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 7);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='unsupported'").get()?.value ?? 0, 0);
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='parse_errors'").get()?.value ?? 0, 0);
   assert.ok(db.prepare('SELECT 1 FROM sent WHERE key=?').get('retained-history'));
