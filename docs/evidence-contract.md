@@ -63,6 +63,8 @@ accepts 64 MiB (Jev's 32-MiB body plus JSON-envelope escaping); larger rejected
 exports stay in the source/outbox, never truncated.
 If a multi-record envelope receives HTTP 413, delivery retries smaller groups of
 whole records. A receiver-sized record must not get stuck behind an oversized batch.
+Whole-record exports use the pinned Collector's native parallel-consumer default
+(10 in 0.157.0), rather than the previous forced single consumer.
 There is no asynchronous log batch processor before the persistent queue: a full
 queue must reject the caller before acknowledgement. Version 7 replays earlier
 acknowledgements once (transport version 3) to recover possible pre-queue loss.

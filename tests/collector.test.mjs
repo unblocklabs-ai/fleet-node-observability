@@ -113,11 +113,18 @@ test('pinned real Collector routes heartbeats separately and filters only struct
   assert.equal(metrics(await documents(join(root, 'heartbeat.json'))).includes('node_load1'), false);
 });
 
-test('pinned Collector rejects an unqueueable log before acknowledging the caller', { skip: !process.env.FLEET_COLLECTOR_BINARY }, async t => {
+test('pinned Collector rejects unqueueable logs before acknowledgement and drains accepted records concurrently', { skip: !process.env.FLEET_COLLECTOR_BINARY }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'fleet-log-backpressure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const [otlp, health, internal] = await Promise.all([port(), port(), port()]);
-  const downstream = createServer((_req,res) => {res.writeHead(503);res.end();});
+  let accepting = false, active = 0, peak = 0, delivered = 0;
+  const downstream = createServer(async (req,res) => {
+    for await (const _chunk of req) { /* drain the actual OTLP request */ }
+    if (!accepting) { res.writeHead(503); res.end(); return; }
+    active++; peak = Math.max(peak,active);
+    await delay(100);
+    res.end('{}'); active--; delivered++;
+  });
   downstream.listen(0,'127.0.0.1'); await once(downstream,'listening');
   t.after(() => new Promise(resolve => downstream.close(resolve)));
   const config = renderCollectorConfig(context(root));
@@ -146,4 +153,11 @@ test('pinned Collector rejects an unqueueable log before acknowledging the calle
   const body=JSON.stringify({resourceLogs:[{scopeLogs:[{logRecords:[{body:{stringValue:'synthetic diagnostic '.repeat(10000)}}]}]}]});
   const response=await fetch(`http://127.0.0.1:${otlp}/v1/logs`,{method:'POST',headers:{'Content-Type':'application/json'},body});
   assert.equal(response.ok,false,'a record not durably queued must not be acknowledged');
+  accepting = true;
+  const admitted = await fetch(`http://127.0.0.1:${otlp}/v1/logs`, { method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({resourceLogs:[{scopeLogs:[{logRecords:Array.from({length:4},(_,i)=>({body:{stringValue:`complete record ${i}`}}))}]}]}) });
+  assert.equal(admitted.ok,true);
+  for (let i=0; i<200 && delivered<4; i++) await delay(25);
+  assert.equal(delivered,4);
+  assert.ok(peak>1,'whole-record exports must not be serialized behind one consumer');
 });

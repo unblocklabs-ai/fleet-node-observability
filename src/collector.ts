@@ -42,6 +42,10 @@ function scrape(job: string, endpoint: string) {
 
 /** Names, queue limits and source attributes are the deployed central contract. */
 export function renderCollectorConfig(ctx: RuntimeContext) {
+  const logs = exporter(ctx, 96, 1024, '0s');
+  // Use the pinned Collector's parallel-export default instead of forcing all
+  // whole-record log requests through one consumer. Other queues are unchanged.
+  const { num_consumers: _serial, ...logQueue } = logs.sending_queue;
   return {
     extensions: {
       'file_storage/fleet': {
@@ -73,9 +77,9 @@ export function renderCollectorConfig(ctx: RuntimeContext) {
     },
     exporters: {
       'otlp_http/logs': {
-        ...exporter(ctx, 96, 1024, '0s'),
+        ...logs,
         sending_queue: {
-          ...exporter(ctx, 96, 1024, '0s').sending_queue,
+          ...logQueue,
           // The byte splitter permanently drops an indivisible log above max_size.
           // Send whole log records; one record per request also avoids aggregation
           // pushing a provider-sized packet over the HTTP transport envelope.
