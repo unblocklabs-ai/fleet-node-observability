@@ -10,6 +10,7 @@ import { collectCron } from './cron.js';
 import { collectSessions } from './sessions.js';
 import { collectCodex } from './codex.js';
 import { collectComparison } from './comparison.js';
+import { collectEvidence } from './evidence.js';
 import { installDependencies, verifyDependencies } from './dependencies.js';
 import { writeCollectorConfig } from './collector.js';
 import { prepareServices, restartServices, serviceStatus, startServices, stopServices } from './services.js';
@@ -21,7 +22,7 @@ const help = `fleet-node — standalone macOS telemetry (Node 24.18+)
        --openclaw PATH --codex PATH [--home PATH] [--openclaw-root PATH]
        (--token-file FILE | --authorization-file FILE) [--root PATH]
   prepare [--collector-archive FILE --exporter-archive FILE] [--root PATH]
-  collect heartbeat|readiness|thermal|cron|sessions|codex|comparison [--root PATH]
+  collect heartbeat|readiness|thermal|cron|sessions|codex|comparison|evidence [--root PATH]
   validate | status | stop | start | restart [--root PATH]
   configure-openclaw [--root PATH]
   --version | --help
@@ -52,7 +53,7 @@ async function main(): Promise<number> {
   }
   const context = await loadContext(root);
   if (command === 'collect') {
-    const collectors = { heartbeat: collectHeartbeat, readiness: collectReadiness, thermal: collectThermal, cron: collectCron, sessions: collectSessions, codex: collectCodex, comparison: collectComparison };
+    const collectors = { heartbeat: collectHeartbeat, readiness: collectReadiness, thermal: collectThermal, cron: collectCron, sessions: collectSessions, codex: collectCodex, comparison: collectComparison, evidence: collectEvidence };
     const job = positionals[1];
     if (!job || !Object.hasOwn(collectors, job) || positionals.length !== 2) throw new Error('Unknown collector');
     if (job === 'codex' && !context.config.codex_usage_enabled) throw new Error('Codex usage is disabled');
@@ -62,6 +63,7 @@ async function main(): Promise<number> {
       const results = await Promise.allSettled([
         collectCron(context),
         runCommand(context.settings.nodePath, [fileURLToPath(import.meta.url), 'collect', 'comparison', '--root', context.root], { timeoutMs: 45000, maxBytes: 8192 }),
+        runCommand(context.settings.nodePath, [fileURLToPath(import.meta.url), 'collect', 'evidence', '--root', context.root], { timeoutMs: 45000, maxBytes: 8192 }),
       ]);
       return results.some(result => result.status === 'rejected' || typeof result.value === 'number' && result.value !== 0) ? 1 : 0;
     }
