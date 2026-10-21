@@ -1,6 +1,6 @@
 {
   "name": "@unblocklabs/fleet-node",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "Standalone macOS fleet node telemetry agent",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "os": ["darwin"],
   "cpu": ["arm64", "x64"],
   "bin": { "fleet-node": "dist/cli.js" },
-  "files": ["dist/*.js", "README.md", "LICENSE", "docs/migration.md", "docs/sessions-contract.md"],
+  "files": ["dist/*.js", "README.md", "LICENSE", "docs/migration.md", "docs/sessions-contract.md", "docs/evidence-contract.md"],
   "engines": { "node": ">=24.18.0 <25" },
   "scripts": {
     "build": "tsc",

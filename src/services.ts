@@ -28,7 +28,7 @@ function command(ctx: RuntimeContext, job: ServiceJob): string[] {
 }
 
 /** The stable launcher only gates and execs. launchd remains the sole supervisor. */
-function launcher(ctx: RuntimeContext): string {
+function launcher(ctx: RuntimeContext, backgroundCodex: boolean): string {
   const cases = serviceJobs.map((job) => `  ${job}) exec ${command(ctx, job).map(shell).join(' ')} ;;`).join('\n');
   return `#!/bin/sh
 set -eu
@@ -38,6 +38,7 @@ job="\${1:-}"
 case "$job" in collector|exporter|heartbeat|readiness|thermal|cron|sessions|codex) ;; *) exit 64 ;; esac
 [ -f "$gate" ] && [ ! -L "$gate" ] || exit 0
 if [ "$job" = codex ]; then [ -f ${shell(join(ctx.root, 'services/codex-enabled'))} ] || exit 0; fi
+${backgroundCodex ? 'if [ "$job" = codex ]; then [ "${FLEET_NODE_CODEX_BACKGROUND:-}" = 1 ] || exit 0; fi\n' : ''}\
 lock=${shell(join(ctx.root, 'state/jobs'))}/"$job"
 [ ! -L "$lock" ] || exit 1
 if ! /bin/mkdir "$lock" 2>/dev/null; then
@@ -71,15 +72,16 @@ esac
 `;
 }
 
-function plist(ctx: RuntimeContext, job: ServiceJob): string {
+function plist(ctx: RuntimeContext, job: ServiceJob, backgroundCodex: boolean): string {
   const interval = intervals[job];
+  const background = job === 'codex' && backgroundCodex;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>Label</key><string>${serviceLabel(job)}</string>
-<key>UserName</key><string>${xml(userInfo().username)}</string>
+${background ? '<key>LimitLoadToSessionType</key><string>Background</string>' : `<key>UserName</key><string>${xml(userInfo().username)}</string>`}
 <key>ProgramArguments</key><array><string>/bin/sh</string><string>${xml(join(ctx.root, 'services/launch.sh'))}</string><string>${job}</string></array>
-<key>EnvironmentVariables</key><dict><key>HOME</key><string>${xml(ctx.settings.nodeHome)}</string><key>PATH</key><string>${xml(dirname(ctx.settings.nodePath))}:/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
+<key>EnvironmentVariables</key><dict><key>HOME</key><string>${xml(ctx.settings.nodeHome)}</string><key>PATH</key><string>${xml(dirname(ctx.settings.nodePath))}:/usr/bin:/bin:/usr/sbin:/sbin</string>${background ? '<key>FLEET_NODE_CODEX_BACKGROUND</key><string>1</string>' : ''}</dict>
 <key>Umask</key><integer>63</integer>
 <key>RunAtLoad</key><true/>
 ${interval === undefined ? '<key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>10</integer>' : `<key>StartInterval</key><integer>${interval}</integer>`}
@@ -110,8 +112,11 @@ export async function prepareServices(ctx: RuntimeContext): Promise<{ installScr
     await lstat(join(ctx.root, 'services/enabled'));
     throw new Error('Stop services before preparing their launch configuration');
   } catch (error) { if (!missing(error)) throw error; }
+  // Preserve an already-repaired Background job; ordinary updates must not
+  // move it back into the system domain. Other hosts retain their existing layout.
+  const backgroundCodex = (await launchdPid(ctx, 'codex')).target.startsWith('user/');
   const launchPath = join(ctx.root, 'services/launch.sh');
-  await writeAtomic(launchPath, launcher(ctx), 0o700);
+  await writeAtomic(launchPath, launcher(ctx, backgroundCodex), 0o700);
   if (ctx.config.codex_usage_enabled) await writeAtomic(join(ctx.root, 'services/codex-enabled'), 'enabled\n');
   else {
     await removeFile(join(ctx.root, 'services/codex-enabled'));
@@ -125,13 +130,15 @@ export async function prepareServices(ctx: RuntimeContext): Promise<{ installScr
   ];
   for (const job of serviceJobs) {
     const source = join(ctx.root, 'services', serviceLabel(job) + '.plist');
-    const target = '/Library/LaunchDaemons/' + serviceLabel(job) + '.plist';
-    await writeAtomic(source, plist(ctx, job));
+    const background = job === 'codex' && backgroundCodex;
+    const domain = background ? `user/${userInfo().uid}` : 'system';
+    const target = (background ? '/Library/LaunchAgents/' : '/Library/LaunchDaemons/') + serviceLabel(job) + '.plist';
+    await writeAtomic(source, plist(ctx, job, backgroundCodex));
     setup.push(
-      `/bin/launchctl bootout ${shell('system/' + serviceLabel(job))} 2>/dev/null || true`,
+      `/bin/launchctl bootout ${shell(domain + '/' + serviceLabel(job))} 2>/dev/null || true`,
       `/usr/bin/install -o root -g wheel -m 0644 ${shell(source)} ${shell(target)}`,
-      `/bin/launchctl enable ${shell('system/' + serviceLabel(job))}`,
-      `/bin/launchctl bootstrap system ${shell(target)}`,
+      `/bin/launchctl enable ${shell(domain + '/' + serviceLabel(job))}`,
+      `/bin/launchctl bootstrap ${shell(domain)} ${shell(target)}`,
     );
   }
   const installScript = join(ctx.root, 'services/install-system.sh');
@@ -162,15 +169,20 @@ export function parseLaunchdStatus(ctx: RuntimeContext, job: ServiceJob, output:
   return { loaded: true, pid: match ? Number(match[1]) : null };
 }
 
-async function launchdPid(ctx: RuntimeContext, job: ServiceJob): Promise<{ loaded: boolean; pid: number | null }> {
-  if (process.platform !== 'darwin') return { loaded: false, pid: null };
-  try {
-    const { stdout } = await execute('/bin/launchctl', ['print', 'system/' + serviceLabel(job)], { timeout: 5_000, maxBuffer: 1024 * 1024 });
-    return parseLaunchdStatus(ctx, job, stdout);
-  } catch (error) {
-    if (error instanceof Error && 'stderr' in error && /Could not find (?:specified )?service|No such process/i.test(String(error.stderr))) return { loaded: false, pid: null };
-    throw error;
+async function launchdPid(ctx: RuntimeContext, job: ServiceJob): Promise<{ loaded: boolean; pid: number | null; target: string }> {
+  const system = 'system/' + serviceLabel(job);
+  if (process.platform === 'darwin') {
+    const targets = job === 'codex' ? [`user/${userInfo().uid}/${serviceLabel(job)}`, system] : [system];
+    for (const target of targets) {
+      try {
+        const { stdout } = await execute('/bin/launchctl', ['print', target], { timeout: 5_000, maxBuffer: 1024 * 1024 });
+        return { ...parseLaunchdStatus(ctx, job, stdout), target };
+      } catch (error) {
+        if (!(error instanceof Error && 'stderr' in error && /Could not find (?:specified )?service|No such process/i.test(String(error.stderr)))) throw error;
+      }
+    }
   }
+  return { loaded: false, pid: null, target: system };
 }
 
 interface LockOwner { pid: number; birth: string }

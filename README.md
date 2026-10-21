@@ -53,7 +53,9 @@ or Screen Recording itself. Verify the next scheduled observation has permission
 collection status `ok`; a successful SSH read alone does not prove scheduled access.
 
 All are system LaunchDaemons with `UserName` set to the ordinary node account: they do
-not depend on GUI login. One hung OpenClaw/SQLite/Codex check cannot block heartbeat.
+not depend on GUI login. An existing repaired Background Codex LaunchAgent is
+preserved during updates; this release does not migrate other hosts to that layout.
+One hung OpenClaw/SQLite/Codex check cannot block heartbeat.
 Subprocesses have deadlines, output limits and whole-process-group cleanup. Session SQL
 runs in a killable child, uses read-only WAL-aware sources, and preserves the existing
 hashed-identity SQLite ledger. See [session semantics](docs/sessions-contract.md).
@@ -98,7 +100,7 @@ FLEET_ROOT="$HOME/.local/share/fleet-node"
 FLEET_CLI="$FLEET_PREFIX/lib/node_modules/@unblocklabs/fleet-node/dist/cli.js"
 
 "$FLEET_NODE" "$FLEET_NPM" install --global --prefix "$FLEET_PREFIX" \
-  --ignore-scripts /absolute/path/unblocklabs-fleet-node-0.1.2.tgz
+  --ignore-scripts /absolute/path/unblocklabs-fleet-node-0.1.4.tgz
 
 "$FLEET_NODE" "$FLEET_CLI" init --root "$FLEET_ROOT" \
   --config /absolute/private/node-agent.json \
@@ -156,6 +158,16 @@ state-format change requires a separate, explicit migration.
 `restart` performs the same gate-close/quiesce/gate-open cycle, without sudo. Long-running
 jobs recover on launchd's next throttled retry; checks resume on their own intervals
 (up to five minutes). A loaded one-shot need not have a running PID between checks.
+
+## Native tool evidence (opt-in)
+
+After an approved canary/rollout, enable the existing five-minute native evidence
+collector by writing `v1` to private `config/evidence.enabled` in the runtime root.
+It discovers managed Codex homes across agents and forwards complete, best-effort
+redacted tool outputs through the existing authenticated pipeline. It does not
+collect messages, prompts or tool arguments. Other harnesses and compressed
+archives remain unsupported. Removing the marker disables future runs without
+deleting checkpoints or history. See [the evidence contract](docs/evidence-contract.md).
 
 ## Verify
 
