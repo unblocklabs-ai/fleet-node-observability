@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm, chmod, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, appendFile, readFile, rm, chmod, rename, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -101,12 +101,22 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   await mkdir(old, { recursive: true });
   const ignored = JSON.stringify({ payload: { type: 'user_message', text: 'PRIVATE '.repeat(9000) } }) + '\n';
   for (let i = 0; i < 70; i++) await writeFile(join(old, `${i}.jsonl`), ignored.repeat(8));
+  const longLived = join(old, 'ongoing.jsonl');
+  await writeFile(longLived, meta + line('long-lived-first', 'completed', { tool: 'old_session_probe' }) + '\n');
+  const yesterday = join(sessions, new Date(Date.now() - 86400_000).toISOString().slice(0, 10).replaceAll('-', '/'));
+  await mkdir(yesterday, { recursive: true });
+  for (let i = 0; i < 70; i++) {
+    const historical = join(yesterday, `${i}.jsonl`);
+    await writeFile(historical, ignored);
+    await utimes(historical, new Date(now - 86400_000), new Date(now - 86400_000));
+  }
   await appendFile(path, line('novel', 'completed', { content_items: [{ text: 'TypeError: PRIVATE bearer sk-SECRET_CREDENTIAL\nECONNRESET PRIVATE\ninvalid arguments: PRIVATE\nThe purple gasket rejected the seventh widget.\npassword="SECRET_CREDENTIAL with spaces"' }], error: {message:'Nested original error', access_token:'SECRET_CREDENTIAL'} }) + '\n');
   await appendFile(path, line('http429', 'completed', { content_items: [{ text: 'Traceback (most recent call last):\nPRIVATE request(timeout=30)\nrequests.exceptions.HTTPError: 429 Client Error: PRIVATE' }] }) + '\n');
   await appendFile(path, line('composed-search', 'completed', { type: 'CommandExecution', command: ['/bin/zsh', '-lc', 'rg PRIVATE; python PRIVATE'], exit_code: 1, aggregated_output: '', content_items: [] }) + '\n');
   const beforeBackfill = packets.length;
   assert.equal(await run(), 0);
   const fresh = packets.slice(beforeBackfill).find(p => p.kind === 'observation' && p.diagnostics.error_types.includes('TypeError'));
+  assert.ok(fresh, 'recent historical files must not hide newly appended evidence');
   assert.deepEqual(fresh.diagnostics.error_types, ['TypeError']);
   assert.deepEqual(fresh.diagnostics.codes, ['ECONNRESET']);
   assert.deepEqual(fresh.diagnostics.markers, ['invalid_arguments']);
@@ -119,6 +129,7 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.deepEqual(http.signals, []); // timeout parameter is not a timeout outcome
   assert.ok(packets.slice(beforeBackfill).some(p => p.kind === 'observation' && p.population === 'command_execution' && p.executable === 'other'));
   assert.ok(packets.slice(beforeBackfill).some(p => p.kind === 'coverage' && p.pending_files > 0));
+  assert.ok(packets.some(p => p.kind === 'observation' && p.tool === 'old_session_probe'));
   // A real record may span many I/O chunks. Its tail and ninth text item are
   // evidence, not optional excerpts; a partial record must wait without loss.
   const large = line('large-tail', 'completed', { aggregated_output: 'PRIVATE🙂\u2028\u2029\n'.repeat(70000) + 'FileNotFoundError: PRIVATE\n',
@@ -159,5 +170,10 @@ test('evidence subprocess is opt-in, private, replayable, and resumes partial re
   assert.equal(db.prepare("SELECT value FROM counters WHERE key='parse_errors'").get()?.value ?? 0, 0);
   assert.ok(db.prepare('SELECT 1 FROM sent WHERE key=?').get('retained-history'));
   db.close();
+  // A long-lived session can still receive new items outside the recent date folders.
+  await appendFile(longLived, line('long-lived-new', 'completed') + '\n');
+  const beforeAppend = packets.length;
+  assert.equal(await run(), 0);
+  assert.equal(packets.slice(beforeAppend).filter(p => p.kind === 'observation').length, 1);
   if (process.env.FLEET_EVIDENCE_FIXTURE) await writeFile(process.env.FLEET_EVIDENCE_FIXTURE, JSON.stringify(packets));
 });

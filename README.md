@@ -100,7 +100,7 @@ FLEET_ROOT="$HOME/.local/share/fleet-node"
 FLEET_CLI="$FLEET_PREFIX/lib/node_modules/@unblocklabs/fleet-node/dist/cli.js"
 
 "$FLEET_NODE" "$FLEET_NPM" install --global --prefix "$FLEET_PREFIX" \
-  --ignore-scripts /absolute/path/unblocklabs-fleet-node-0.1.4.tgz
+  --ignore-scripts /absolute/path/unblocklabs-fleet-node-0.1.5.tgz
 
 "$FLEET_NODE" "$FLEET_CLI" init --root "$FLEET_ROOT" \
   --config /absolute/private/node-agent.json \

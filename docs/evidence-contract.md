@@ -36,8 +36,10 @@ before the byte anchor are outside the append-only source contract.
 There are no agent/file/directory inventory or nesting-depth cutoffs. Collection
 is scheduled (50 discovery directories and 64 file visits per run, with backpressure
 at 10,000 outbox facts). These defer work without discarding it. I/O uses 512-KiB chunks but completes
-spanning records without truncating or dropping them. Up to 32 slots prioritize recent days;
-remaining slots rotate historical files by last visit. Today/yesterday discovery
+spanning records without truncating or dropping them. Up to 32 slots prioritize
+pending or changed files by modification time, including long-lived sessions in
+older date folders. Metadata checks cover the known inventory without reading
+transcript contents; remaining read slots rotate historical files by last visit. Today/yesterday discovery
 continues during catch-up, preventing old inventories from hiding new files.
 Partial records of any size wait at their starting offset. JSONL is framed only
 by LF bytes, not Unicode separators inside JSON strings. Coverage reports scan

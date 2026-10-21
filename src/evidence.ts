@@ -1,6 +1,6 @@
 /** Native evidence and complete redacted diagnostics, isolated in the cron child. */
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, lstatSync } from 'node:fs';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -199,8 +199,20 @@ async function scan(context: RuntimeContext, db: DatabaseSync, now: number, vers
     db.prepare('DELETE FROM directories WHERE path=?').run(path);
   }
   const started = get('scan_started_ms');
-  const recent = new Date(now - 2 * 86400_000).toISOString().slice(0, 10).replaceAll('-', '/');
-  const hot = db.prepare('SELECT * FROM files WHERE day>=? ORDER BY visited,path LIMIT 32').all(recent);
+  // Session directory dates are creation dates, not activity. New writes to a
+  // long-lived session must not wait behind unvisited historical files. Metadata
+  // checks do not read transcript content; actual reads retain the 64-file budget.
+  const changed = [];
+  for (const row of db.prepare('SELECT * FROM files').all()) {
+    let stat;
+    try { stat = lstatSync(String(row.path)); }
+    catch (error) { if (isErrno(error, 'ENOENT')) continue; throw error; }
+    if (stat.size !== Number(row.offset) || stat.mtimeMs > Number(row.visited) || String(stat.dev) + ':' + String(stat.ino) !== row.inode) {
+      changed.push({ row, modified: stat.mtimeMs });
+    }
+  }
+  const hot = changed.sort((a, b) => b.modified - a.modified || Number(a.row.visited) - Number(b.row.visited) || String(a.row.path).localeCompare(String(b.row.path)))
+    .slice(0, 32).map(item => item.row);
   const cold = db.prepare('SELECT * FROM files WHERE checked < ? ORDER BY visited,path LIMIT 64').all(started);
   const selected = [...new Map([...hot, ...cold].map(row => [row.path, row])).values()].slice(0, 64);
   for (const row of selected) {

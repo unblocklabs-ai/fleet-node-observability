@@ -1,6 +1,6 @@
 {
   "name": "@unblocklabs/fleet-node",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Standalone macOS fleet node telemetry agent",
   "repository": {
     "type": "git",
