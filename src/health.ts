@@ -108,20 +108,149 @@ export async function probeReadiness(url: string, timeoutMs = 5_000): Promise<bo
         if (bytes > 64 * 1024) return false;
       }
     }
-    // curl --fail regards redirects as successful; it does not follow them by default.
-    return response.status >= 200 && response.status < 400;
+    return response.status >= 200 && response.status < 300;
   } catch { return false; }
+}
+
+/** Any HTTP status from the remote origin proves DNS + ephemeral port + TCP + TLS succeeded. */
+export async function probeOutboundConnectivity(endpoint: string, timeoutMs = 3_000): Promise<boolean> {
+  try {
+    const origin = new URL(endpoint).origin;
+    const response = await fetch(origin, { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs), redirect: 'manual' });
+    await response.body?.cancel().catch(() => undefined);
+    return response.status >= 100 && response.status < 600;
+  } catch { return false; }
+}
+
+export function parseEphemeralPortRange(text: string): { first: number; last: number } | null {
+  const nums = text.trim().split(/\s+/).map(Number);
+  if (nums.length !== 2) return null;
+  const [first, last] = nums;
+  if (!Number.isInteger(first) || !Number.isInteger(last) || first! <= 0 || last! <= first! || last! > 65535) return null;
+  return { first: first!, last: last! };
+}
+
+export function countActiveEphemeralPorts(netstatOutput: string, range: { first: number; last: number }): number {
+  let count = 0;
+  for (const line of netstatOutput.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('tcp')) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length < 6) continue;
+    const state = parts[5] ?? '';
+    if (state === 'LISTEN') continue;
+    const localAddr = parts[3] ?? '';
+    const dot = localAddr.lastIndexOf('.');
+    if (dot < 0) continue;
+    const port = Number(localAddr.slice(dot + 1));
+    if (Number.isInteger(port) && port >= range.first && port <= range.last) count++;
+  }
+  return count;
+}
+
+export function parseBootTime(text: string): number | null {
+  const match = /\bsec\s*=\s*(\d+)\b/.exec(text);
+  if (!match) return null;
+  const sec = Number(match[1]);
+  return Number.isSafeInteger(sec) && sec > 0 ? sec : null;
+}
+
+export function parseGatewayLaunchd(output: string): { loaded: boolean; running: boolean } {
+  let loaded = false;
+  let running = false;
+  for (const line of output.split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 3) continue;
+    const [pid, , label] = parts;
+    if (!label || !/openclaw.*gateway/i.test(label)) continue;
+    loaded = true;
+    if (pid && /^\d+$/.test(pid) && Number(pid) > 0) running = true;
+  }
+  return { loaded, running };
+}
+
+export interface HostSignals {
+  outboundOk: boolean;
+  ports: { inUse: number; limit: number } | null;
+  launchd: { loaded: boolean; running: boolean } | null;
+  bootTimeSeconds: number | null;
+}
+
+export function renderHostSignals(node: string, now: number, signals: HostSignals): string {
+  let out = metric('fleet_node_outbound_connectivity_ok', 'Whether outbound HTTPS connectivity to the telemetry origin succeeded.', signals.outboundOk ? 1 : 0, { node })
+    + metric('fleet_node_outbound_check_timestamp_seconds', 'Unix timestamp of the latest outbound connectivity probe.', now, { node })
+    + metric('fleet_macos_ephemeral_ports_available', 'Whether macOS ephemeral TCP port usage was collected.', signals.ports ? 1 : 0, { node });
+  if (signals.ports && signals.ports.limit > 0) {
+    const ratio = Math.min(1, Math.max(0, signals.ports.inUse / signals.ports.limit));
+    out += metric('fleet_macos_ephemeral_ports_in_use', 'Count of active non-LISTEN TCP sockets using local ephemeral ports.', signals.ports.inUse, { node })
+      + metric('fleet_macos_ephemeral_ports_limit', 'Size of the configured macOS ephemeral TCP port range.', signals.ports.limit, { node })
+      + metric('fleet_macos_ephemeral_ports_used_ratio', 'Fraction of macOS ephemeral TCP ports currently in use.', Number(ratio.toFixed(6)), { node });
+  }
+  if (signals.launchd) {
+    out += metric('openclaw_gateway_launchd_loaded', 'Whether an OpenClaw gateway launchd job is loaded in the current session.', signals.launchd.loaded ? 1 : 0, { node })
+      + metric('openclaw_gateway_launchd_running', 'Whether a loaded OpenClaw gateway launchd job currently has a running PID.', signals.launchd.running ? 1 : 0, { node });
+  }
+  if (signals.bootTimeSeconds !== null) {
+    out += metric('fleet_node_boot_time_seconds', 'Host boot Unix timestamp from kern.boottime.', signals.bootTimeSeconds, { node });
+  }
+  return out;
+}
+
+async function collectHostSignals(context: RuntimeContext): Promise<HostSignals> {
+  const env = runtimeEnv(context.settings);
+  const cwd = context.settings.nodeHome;
+  const outboundPromise = probeOutboundConnectivity(context.config.telemetry_endpoint);
+  const portsPromise = (async () => {
+    if (process.platform !== 'darwin') return null;
+    try {
+      const rangeOut = await runCommand('/usr/sbin/sysctl', ['-n', 'net.inet.ip.portrange.first', 'net.inet.ip.portrange.last'], {
+        timeoutMs: 3_000, cwd, env, maxBytes: 4096,
+      });
+      const range = parseEphemeralPortRange(rangeOut.stdout);
+      if (!range) return null;
+      const netstatOut = await runCommand('/usr/sbin/netstat', ['-anp', 'tcp'], {
+        timeoutMs: 5_000, cwd, env, maxBytes: 4 * 1024 * 1024,
+      });
+      return { inUse: countActiveEphemeralPorts(netstatOut.stdout, range), limit: range.last - range.first + 1 };
+    } catch { return null; }
+  })();
+  const launchdPromise = (async () => {
+    if (process.platform !== 'darwin') return null;
+    try {
+      const out = await runCommand('/bin/launchctl', ['list'], {
+        timeoutMs: 3_000, cwd, env, maxBytes: 1024 * 1024,
+      });
+      return parseGatewayLaunchd(out.stdout);
+    } catch { return null; }
+  })();
+  const bootPromise = (async () => {
+    if (process.platform !== 'darwin') return null;
+    try {
+      const out = await runCommand('/usr/sbin/sysctl', ['-n', 'kern.boottime'], {
+        timeoutMs: 3_000, cwd, env, maxBytes: 4096,
+      });
+      return parseBootTime(out.stdout);
+    } catch { return null; }
+  })();
+  const [outboundOk, ports, launchd, bootTimeSeconds] = await Promise.all([outboundPromise, portsPromise, launchdPromise, bootPromise]);
+  return { outboundOk, ports, launchd, bootTimeSeconds };
 }
 
 export async function collectReadiness(context: RuntimeContext): Promise<number> {
   const url = 'http://127.0.0.1:18789/readyz';
   const ready = await probeReadiness(url);
   const node = context.config.node_label;
+  const now = Math.floor(Date.now() / 1000);
   const content = metric('openclaw_gateway_ready', 'Whether the local OpenClaw gateway readiness endpoint is healthy.',
     ready ? 1 : 0, { node, gateway_ready_url: url })
     + metric('openclaw_gateway_check_timestamp_seconds', 'Unix timestamp of the completed local readiness probe.',
-      Math.floor(Date.now() / 1000), { node });
+      now, { node });
   await writeAtomic(join(context.root, 'textfiles', 'openclaw_gateway_ready.prom'), content, 0o644);
+  try {
+    const signals = await collectHostSignals(context);
+    await writeAtomic(join(context.root, 'textfiles', 'fleet_node_signals.prom'),
+      renderHostSignals(node, Math.floor(Date.now() / 1000), signals), 0o644);
+  } catch { /* Never let auxiliary host-signal collection fail readiness publication. */ }
   return 0;
 }
 
